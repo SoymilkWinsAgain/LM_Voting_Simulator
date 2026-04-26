@@ -1,0 +1,65 @@
+source_year: 2024
+respondent_id: caseid
+fields:
+  tookpost:
+    variable: tookpost
+  state_po:
+    variable: inputstate
+  birthyr:
+    variable: birthyr
+  gender:
+    variable: gender4
+  race_ethnicity:
+    variable: race
+  hispanic:
+    variable: hispanic
+  education_detail:
+    variable: educ
+  party_id_3_pre:
+    variable: pid3
+  party_id_7_pre:
+    variable: pid7
+  party_id_7_post:
+    variable: CC24_pid7
+  ideology_self_7:
+    variable: ideo5
+  registered_self_pre:
+    variable: votereg
+  registered_self_post:
+    variable: votereg_post
+  party_registration_self:
+    variable: CC24_361b
+  party_registration_validated:
+    variable: TS_partyreg
+  citizenship:
+    variable: cit1
+  county_fips:
+    variable: countyfips
+  county_name:
+    variable: countyname
+  cdid:
+    variable: cdid119
+  region:
+    variable: region
+  income_bin:
+    variable: faminc_new
+  employment:
+    variable: employ
+  religion:
+    variable: religpew
+  bornagain:
+    variable: pew_bornagain
+  marital_status:
+    variable: marstat
+  weight_common:
+    variable: commonweight
+  weight_common_post:
+    variable: commonpostweight
+  weight_vv:
+    variable: vvweight
+  weight_vv_post:
+    variable: vvweight_post
+  validated_registration:
+    variable: TS_voterstatus
+  validated_turnout_2024:
+    variable: TS_g2024

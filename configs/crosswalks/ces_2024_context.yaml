@@ -1,0 +1,10 @@
+president:
+  candidates:
+    - slot: democrat
+      name: Kamala Harris
+      party: Democratic
+      incumbent: false
+    - slot: republican
+      name: Donald Trump
+      party: Republican
+      incumbent: false

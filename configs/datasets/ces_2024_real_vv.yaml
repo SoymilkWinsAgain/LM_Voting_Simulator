@@ -1,0 +1,8 @@
+name: ces_2024_common_vv
+source: ces
+year: 2024
+path: data/raw/ces/CES_2024.csv
+format: csv
+respondent_id: caseid
+codebook: configs/codebooks/ces_2024_value_labels.yaml
+schema_version: ces_2024_common_vv_v1

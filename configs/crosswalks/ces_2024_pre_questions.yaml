@@ -1,0 +1,166 @@
+questions:
+  - question_id: national_economy_past_year
+    source_variable: CC24_301
+    question_text: "Would you say that over the past year the nation's economy has changed?"
+    topic: economy
+    wave: pre
+    canonical_mapping:
+      "1": much_better
+      "2": somewhat_better
+      "3": same
+      "4": somewhat_worse
+      "5": much_worse
+      "6": not_sure
+  - question_id: household_income_past_year
+    source_variable: CC24_302
+    question_text: "Over the past year, has your household's annual income changed?"
+    topic: economy
+    wave: pre
+    canonical_mapping:
+      "1": increased_a_lot
+      "2": increased_somewhat
+      "3": same
+      "4": decreased_somewhat
+      "5": decreased_a_lot
+  - question_id: prices_past_year
+    source_variable: CC24_303
+    question_text: "Over the past year, have prices of everyday goods and services changed?"
+    topic: inflation
+    wave: pre
+    canonical_mapping:
+      "1": increased_a_lot
+      "2": increased_somewhat
+      "3": same
+      "4": decreased_somewhat
+      "5": decreased_a_lot
+  - question_id: biden_approval
+    source_variable: CC24_312a
+    question_text: "Do you approve or disapprove of President Biden's job performance?"
+    topic: approval
+    wave: pre
+    is_grid_item: true
+    canonical_mapping: &approval_mapping
+      "1": strongly_approve
+      "2": somewhat_approve
+      "3": somewhat_disapprove
+      "4": strongly_disapprove
+      "5": not_sure
+  - question_id: harris_approval
+    source_variable: CC24_312i
+    question_text: "Do you approve or disapprove of Vice President Harris's job performance?"
+    topic: approval
+    wave: pre
+    is_grid_item: true
+    canonical_mapping: *approval_mapping
+  - question_id: background_checks
+    source_variable: CC24_321c
+    question_text: "Do you support or oppose requiring criminal background checks on all gun sales?"
+    topic: guns
+    wave: pre
+    is_grid_item: true
+    canonical_mapping: &support_mapping
+      "1": support
+      "2": oppose
+  - question_id: legal_status_longtime_immigrants
+    source_variable: CC24_323a
+    question_text: "Do you support or oppose granting legal status to long-time working undocumented immigrants without felony convictions?"
+    topic: immigration
+    wave: pre
+    is_grid_item: true
+    canonical_mapping: *support_mapping
+  - question_id: increase_border_patrols
+    source_variable: CC24_323b
+    question_text: "Do you support or oppose increasing the number of border patrols on the US-Mexico border?"
+    topic: immigration
+    wave: pre
+    is_grid_item: true
+    canonical_mapping: *support_mapping
+  - question_id: border_wall
+    source_variable: CC24_323c
+    question_text: "Do you support or oppose building a wall between the U.S. and Mexico?"
+    topic: immigration
+    wave: pre
+    is_grid_item: true
+    canonical_mapping: *support_mapping
+  - question_id: dreamers_pathway
+    source_variable: CC24_323d
+    question_text: "Do you support or oppose permanent resident status and a pathway to citizenship for Dreamers?"
+    topic: immigration
+    wave: pre
+    is_grid_item: true
+    canonical_mapping: *support_mapping
+  - question_id: abortion_choice
+    source_variable: CC24_324a
+    question_text: "Do you support or oppose always allowing a woman the right to obtain an abortion as a matter of choice?"
+    topic: abortion
+    wave: pre
+    is_grid_item: true
+    canonical_mapping: *support_mapping
+  - question_id: epa_co2
+    source_variable: CC24_326a
+    question_text: "Do you support or oppose giving the EPA power to regulate carbon dioxide emissions?"
+    topic: environment
+    wave: pre
+    is_grid_item: true
+    canonical_mapping: *support_mapping
+  - question_id: zoning_apartments
+    source_variable: CC24_328a
+    question_text: "Do you support or oppose relaxing local zoning laws to allow more apartments and condos?"
+    topic: housing
+    wave: pre
+    is_grid_item: true
+    canonical_mapping: *support_mapping
+  - question_id: ideology_self_placement
+    source_variable: CC24_330a
+    question_text: "How would you rate yourself ideologically?"
+    topic: ideology_placement
+    wave: pre
+    is_grid_item: true
+    canonical_mapping: &ideology_rating_mapping
+      "1": very_liberal
+      "2": liberal
+      "3": somewhat_liberal
+      "4": middle_of_the_road
+      "5": somewhat_conservative
+      "6": conservative
+      "7": very_conservative
+      "8": not_sure
+  - question_id: ideology_harris_placement
+    source_variable: CC24_330d
+    question_text: "How would you rate Kamala Harris ideologically?"
+    topic: ideology_placement
+    wave: pre
+    is_grid_item: true
+    canonical_mapping: *ideology_rating_mapping
+  - question_id: ideology_trump_placement
+    source_variable: CC24_330e
+    question_text: "How would you rate Donald Trump ideologically?"
+    topic: ideology_placement
+    wave: pre
+    is_grid_item: true
+    canonical_mapping: *ideology_rating_mapping
+  - question_id: ideology_democratic_party_placement
+    source_variable: CC24_330f
+    question_text: "How would you rate the Democratic Party ideologically?"
+    topic: ideology_placement
+    wave: pre
+    is_grid_item: true
+    canonical_mapping: *ideology_rating_mapping
+  - question_id: ideology_republican_party_placement
+    source_variable: CC24_330g
+    question_text: "How would you rate the Republican Party ideologically?"
+    topic: ideology_placement
+    wave: pre
+    is_grid_item: true
+    canonical_mapping: *ideology_rating_mapping
+  - question_id: party_registration_self
+    source_variable: CC24_361b
+    question_text: "With which party, if any, are you registered?"
+    topic: party_registration
+    wave: pre
+    canonical_mapping:
+      "1": independent_or_other
+      "2": democrat
+      "3": republican
+      "4": independent_or_other
+      "5": unknown

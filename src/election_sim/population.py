@@ -18,19 +18,28 @@ AGENT_COLUMNS = [
     "agent_id",
     "year",
     "state_po",
+    "source_dataset",
+    "source_respondent_id",
     "cell_schema",
     "cell_id",
     "base_anes_id",
+    "base_ces_id",
     "memory_card_id",
     "match_level",
     "match_distance",
     "sample_weight",
+    "weight_column",
     "age_group",
     "gender",
     "race_ethnicity",
     "education_binary",
+    "income_bin",
     "party_id_3",
+    "party_id_7",
     "ideology_3",
+    "ideology_7",
+    "registered_self_pre",
+    "validated_registration",
     "created_at",
 ]
 
@@ -155,28 +164,150 @@ def build_agents_from_frames(
                         "agent_id": agent_id,
                         "year": int(cfg.scenario.year),
                         "state_po": state,
+                        "source_dataset": "synthetic",
+                        "source_respondent_id": match["base_anes_id"],
                         "cell_schema": cell_schema["name"],
                         "cell_id": cell["cell_id"],
                         "base_anes_id": match["base_anes_id"],
+                        "base_ces_id": None,
                         "memory_card_id": match["memory_card_id"],
                         "match_level": match["match_level"],
                         "match_distance": match["match_distance"],
                         "sample_weight": 1.0,
+                        "weight_column": None,
                         "age_group": cell["age_group"],
                         "gender": cell["gender"],
                         "race_ethnicity": cell["race_ethnicity"],
                         "education_binary": cell["education_binary"],
+                        "income_bin": cell.get("income_bin"),
                         "party_id_3": cell["party_id_3"],
+                        "party_id_7": None,
                         "ideology_3": cell["ideology_3"],
+                        "ideology_7": None,
+                        "registered_self_pre": None,
+                        "validated_registration": None,
                         "created_at": pd.Timestamp.now(tz="UTC"),
                     }
                 )
     return pd.DataFrame(rows, columns=AGENT_COLUMNS)
 
 
+def _extra_dict(model: Any) -> dict[str, Any]:
+    return dict(getattr(model, "model_extra", None) or {})
+
+
+def _filter_ces_rows(cfg: RunConfig, ces_respondents: pd.DataFrame) -> pd.DataFrame:
+    extra = _extra_dict(cfg.population)
+    selection = extra.get("selection", {})
+    work = ces_respondents.copy()
+    states = selection.get("states") or cfg.scenario.states
+    if states != "all":
+        work = work[work["state_po"].isin(states)]
+    if selection.get("tookpost_required", False):
+        work = work[work["tookpost"].astype(bool)]
+    if selection.get("citizen_required", False) and "citizenship" in work.columns:
+        work = work[work["citizenship"] == "yes"]
+    return work
+
+
+def _sample_ces_rows(cfg: RunConfig, ces_respondents: pd.DataFrame, weight_column: str) -> pd.DataFrame:
+    extra = _extra_dict(cfg.population)
+    sampling = extra.get("sampling", {})
+    mode = sampling.get("mode", "weighted_sample")
+    rng_seed = int(sampling.get("random_seed", cfg.seed))
+    work = ces_respondents.copy()
+    if mode == "all_rows":
+        return work
+    if mode == "stratified_state_sample":
+        n_per_state = int(sampling.get("n_agents_per_state", cfg.population.n_agents_per_state))
+        parts = []
+        for _, group in work.groupby("state_po", dropna=False):
+            n = min(n_per_state, len(group))
+            weights = group[weight_column].fillna(0).astype(float) if weight_column in group.columns else None
+            if weights is not None and float(weights.sum()) <= 0:
+                weights = None
+            parts.append(group.sample(n=n, replace=False, weights=weights, random_state=rng_seed))
+        return pd.concat(parts, ignore_index=True) if parts else work.head(0)
+    n_total = int(sampling.get("n_total_agents", sampling.get("n_agents", 10)))
+    n_total = min(n_total, len(work))
+    weights = work[weight_column].fillna(0).astype(float) if weight_column in work.columns else None
+    if weights is not None and float(weights.sum()) <= 0:
+        weights = None
+    return work.sample(n=n_total, replace=False, weights=weights, random_state=rng_seed).reset_index(drop=True)
+
+
+def build_agents_from_ces_rows(
+    cfg: RunConfig,
+    ces_respondents: pd.DataFrame,
+    memory_cards: pd.DataFrame,
+) -> pd.DataFrame:
+    extra = _extra_dict(cfg.population)
+    weight_column = extra.get("weight", {}).get("column", "commonpostweight")
+    if weight_column not in ces_respondents.columns and f"weight_{weight_column}" in ces_respondents.columns:
+        weight_column = f"weight_{weight_column}"
+    filtered = _filter_ces_rows(cfg, ces_respondents)
+    if filtered.empty:
+        raise ValueError("No CES respondents remain after population selection")
+    sampled = _sample_ces_rows(cfg, filtered, weight_column)
+    cards_by_ces = memory_cards.set_index(memory_cards["ces_id"].astype(str)) if not memory_cards.empty else None
+    rows: list[dict[str, Any]] = []
+    for idx, respondent in sampled.reset_index(drop=True).iterrows():
+        ces_id = str(respondent["ces_id"])
+        memory_card_id = None
+        if cards_by_ces is not None and ces_id in cards_by_ces.index:
+            memory_card_id = cards_by_ces.loc[ces_id, "memory_card_id"]
+        sample_weight = respondent.get(weight_column)
+        try:
+            sample_weight = float(sample_weight)
+        except (TypeError, ValueError):
+            sample_weight = 1.0
+        if not np.isfinite(sample_weight) or sample_weight <= 0:
+            sample_weight = 1.0
+        rows.append(
+            {
+                "run_id": cfg.run_id,
+                "agent_id": f"{cfg.run_id}_ces_{idx + 1:06d}",
+                "year": int(cfg.scenario.year),
+                "state_po": respondent.get("state_po"),
+                "source_dataset": "ces",
+                "source_respondent_id": ces_id,
+                "cell_schema": "ces_rows_v1",
+                "cell_id": f"CES|{respondent.get('state_po')}|{ces_id}",
+                "base_anes_id": None,
+                "base_ces_id": ces_id,
+                "memory_card_id": memory_card_id,
+                "match_level": 0,
+                "match_distance": 0.0,
+                "sample_weight": sample_weight,
+                "weight_column": weight_column,
+                "age_group": respondent.get("age_group"),
+                "gender": respondent.get("gender"),
+                "race_ethnicity": respondent.get("race_ethnicity"),
+                "education_binary": respondent.get("education_binary"),
+                "income_bin": respondent.get("income_bin"),
+                "party_id_3": respondent.get("party_id_3_pre"),
+                "party_id_7": respondent.get("party_id_7_pre"),
+                "ideology_3": respondent.get("ideology_3"),
+                "ideology_7": respondent.get("ideology_self_7"),
+                "registered_self_pre": respondent.get("registered_self_pre"),
+                "validated_registration": respondent.get("validated_registration"),
+                "created_at": pd.Timestamp.now(tz="UTC"),
+            }
+        )
+    return pd.DataFrame(rows, columns=AGENT_COLUMNS)
+
+
 def build_agents(run_config_path: str | Path, out_path: str | Path) -> Path:
     cfg = load_run_config(run_config_path)
     paths = cfg.paths
+    if cfg.population.source == "ces_rows":
+        agents = build_agents_from_ces_rows(
+            cfg,
+            pd.read_parquet(paths["ces_respondents"]),
+            pd.read_parquet(paths["ces_memory_cards"]),
+        )
+        write_table(agents, out_path)
+        return Path(out_path)
     cell_schema = load_cell_schema(paths["cell_schema"])
     ces_cell_distribution = paths.get(
         "ces_cell_distribution",

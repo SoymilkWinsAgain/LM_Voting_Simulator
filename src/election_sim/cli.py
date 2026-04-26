@@ -7,7 +7,9 @@ from pathlib import Path
 import typer
 
 from .anes import build_anes, build_memory_cards
+from .ces import build_ces as build_ces_pipeline
 from .ces import build_ces_cells as build_ces_cells_pipeline
+from .ces import build_ces_memory_cards as build_ces_memory_pipeline
 from .config import load_run_config
 from .mit import build_mit_results as build_mit_results_pipeline
 from .population import build_agents as build_agents_pipeline
@@ -44,6 +46,41 @@ def build_anes_memory(
     max_facts: int = typer.Option(24, "--max-facts"),
 ) -> None:
     paths = build_memory_cards(respondents, answers, fact_templates, policy, out, max_facts=max_facts)
+    for name, path in paths.items():
+        typer.echo(f"{name}: {path}")
+
+
+@app.command()
+def build_ces(
+    config: Path = typer.Option(..., "--config"),
+    profile_crosswalk: Path = typer.Option(..., "--profile-crosswalk"),
+    question_crosswalk: Path = typer.Option(..., "--question-crosswalk"),
+    target_crosswalk: Path = typer.Option(..., "--target-crosswalk"),
+    context_crosswalk: Path = typer.Option(..., "--context-crosswalk"),
+    out: Path = typer.Option(..., "--out"),
+) -> None:
+    paths = build_ces_pipeline(
+        config,
+        profile_crosswalk,
+        question_crosswalk,
+        target_crosswalk,
+        context_crosswalk,
+        out,
+    )
+    for name, path in paths.items():
+        typer.echo(f"{name}: {path}")
+
+
+@app.command()
+def build_ces_memory(
+    respondents: Path = typer.Option(..., "--respondents"),
+    answers: Path = typer.Option(..., "--answers"),
+    fact_templates: Path = typer.Option(..., "--fact-templates"),
+    policy: str = typer.Option("strict_pre_no_vote_v1", "--policy"),
+    out: Path = typer.Option(..., "--out"),
+    max_facts: int = typer.Option(24, "--max-facts"),
+) -> None:
+    paths = build_ces_memory_pipeline(respondents, answers, fact_templates, policy, out, max_facts=max_facts)
     for name, path in paths.items():
         typer.echo(f"{name}: {path}")
 

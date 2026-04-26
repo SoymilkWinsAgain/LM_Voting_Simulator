@@ -9,7 +9,7 @@ from typing import Any
 import pandas as pd
 from jinja2 import Template
 
-from .anes import LeakageGuard
+from .survey_memory import LeakageGuard
 
 
 DEMOGRAPHIC_TEMPLATE = """You are simulating a U.S. eligible voter in {{ year }}.
@@ -85,10 +85,54 @@ Return JSON only with this schema:
 {"answer": "<option code>", "confidence": <number between 0 and 1>}
 """
 
+CES_PRESIDENT_VOTE_TEMPLATE = """You are simulating how a specific U.S. eligible voter would behave in the 2024 general election.
+Answer as this voter would behave, not as a political analyst.
+
+Voter profile:
+- State: {{ state_po }}
+- Age group: {{ age_group }}
+- Gender: {{ gender }}
+- Race/ethnicity: {{ race_ethnicity }}
+- Education: {{ education_binary }}
+- Party identification: {{ party_id_3 }}
+- 7-point party ID: {{ party_id_7 }}
+- Ideology: {{ ideology_3 }}
+- Registered to vote, self-report pre-election: {{ registered_self_pre }}
+- Validated registration status: {{ validated_registration }}
+
+Survey-derived background facts:
+{% for fact in memory_facts -%}
+- {{ fact }}
+{% endfor %}
+
+Election context:
+- Office: President
+{% for candidate in candidates -%}
+- {{ candidate.candidate_party }} candidate: {{ candidate.candidate_name }}
+{% endfor %}
+
+Task:
+Estimate this voter's turnout probability and presidential vote choice.
+
+Return JSON only with this schema:
+{
+  "turnout_probability": 0.0,
+  "vote_probabilities": {
+    "democrat": 0.0,
+    "republican": 0.0,
+    "other": 0.0,
+    "undecided": 0.0
+  },
+  "most_likely_choice": "democrat|republican|other|undecided|not_vote",
+  "confidence": 0.0
+}
+"""
+
 TEMPLATES = {
     "demographic_only": DEMOGRAPHIC_TEMPLATE,
     "party_ideology": PARTY_IDEOLOGY_TEMPLATE,
     "survey_memory": SURVEY_MEMORY_TEMPLATE,
+    "ces_president_vote_v1": CES_PRESIDENT_VOTE_TEMPLATE,
 }
 
 
@@ -150,6 +194,66 @@ def build_prompt(
     return text, fact_ids
 
 
+def ces_memory_facts_for_agent(
+    agent: pd.Series,
+    question: pd.Series | dict[str, Any],
+    memory_facts: pd.DataFrame,
+    *,
+    memory_policy: str,
+    max_facts: int,
+) -> tuple[list[str], list[str]]:
+    if memory_facts.empty:
+        return [], []
+    base_ces_id = str(agent.get("base_ces_id") or agent.get("source_respondent_id"))
+    facts = memory_facts[memory_facts["ces_id"].astype(str) == base_ces_id]
+    filtered = LeakageGuard().filter_facts(facts, question, memory_policy)
+    if "fact_priority" in filtered.columns:
+        filtered = filtered.sort_values(["fact_priority", "source_variable"], ascending=[False, True])
+    filtered = filtered.head(max_facts)
+    return filtered["fact_text"].tolist(), filtered["memory_fact_id"].tolist()
+
+
+def build_ces_prompt(
+    agent: pd.Series,
+    question: pd.Series | dict[str, Any],
+    *,
+    memory_facts: pd.DataFrame,
+    context: pd.DataFrame,
+    memory_policy: str = "strict_pre_no_vote_v1",
+    max_memory_facts: int = 24,
+) -> tuple[str, list[str]]:
+    prompt_facts, fact_ids = ces_memory_facts_for_agent(
+        agent,
+        question,
+        memory_facts,
+        memory_policy=memory_policy,
+        max_facts=max_memory_facts,
+    )
+    base_ces_id = str(agent.get("base_ces_id") or agent.get("source_respondent_id"))
+    candidates = context[context["ces_id"].astype(str) == base_ces_id].to_dict("records")
+    if not candidates:
+        candidates = [
+            {"candidate_party": "Democratic", "candidate_name": "Kamala Harris"},
+            {"candidate_party": "Republican", "candidate_name": "Donald Trump"},
+        ]
+    template = Template(TEMPLATES["ces_president_vote_v1"])
+    text = template.render(
+        state_po=agent.get("state_po") or "unknown",
+        age_group=agent.get("age_group") or "unknown",
+        gender=agent.get("gender") or "unknown",
+        race_ethnicity=agent.get("race_ethnicity") or "unknown",
+        education_binary=agent.get("education_binary") or "unknown",
+        party_id_3=agent.get("party_id_3") or "unknown",
+        party_id_7=agent.get("party_id_7") or "unknown",
+        ideology_3=agent.get("ideology_3") or "unknown",
+        registered_self_pre=agent.get("registered_self_pre") or "unknown",
+        validated_registration=agent.get("validated_registration"),
+        memory_facts=prompt_facts,
+        candidates=candidates,
+    )
+    return text, fact_ids
+
+
 def parse_json_answer(raw_response: str, allowed: list[str]) -> dict[str, Any]:
     text = raw_response.strip()
     payload: dict[str, Any]
@@ -172,3 +276,57 @@ def parse_json_answer(raw_response: str, allowed: list[str]) -> dict[str, Any]:
     except (TypeError, ValueError):
         confidence = 0.0
     return {"answer": answer, "confidence": confidence, "parse_status": "ok"}
+
+
+def _json_payload(raw_response: str) -> dict[str, Any] | None:
+    text = raw_response.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if not match:
+            return None
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+
+
+def _bounded_float(value: Any, default: float | None = None) -> float | None:
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+def parse_turnout_vote_json(raw_response: str) -> dict[str, Any]:
+    payload = _json_payload(raw_response)
+    if payload is None:
+        return {"parse_status": "failed"}
+    turnout = _bounded_float(payload.get("turnout_probability"))
+    probs = payload.get("vote_probabilities")
+    if turnout is None or not isinstance(probs, dict):
+        return {"parse_status": "invalid_schema"}
+    vote_codes = ["democrat", "republican", "other", "undecided"]
+    parsed_probs = {code: _bounded_float(probs.get(code), 0.0) or 0.0 for code in vote_codes}
+    total = sum(parsed_probs.values())
+    if total <= 0:
+        return {"parse_status": "invalid_schema"}
+    parsed_probs = {code: value / total for code, value in parsed_probs.items()}
+    choice = payload.get("most_likely_choice")
+    allowed_choices = set(vote_codes + ["not_vote"])
+    if choice not in allowed_choices:
+        choice = max(parsed_probs, key=parsed_probs.get)
+        if turnout < 0.5:
+            choice = "not_vote"
+    confidence = _bounded_float(payload.get("confidence"), 0.0) or 0.0
+    return {
+        "parse_status": "ok",
+        "turnout_probability": turnout,
+        "vote_prob_democrat": parsed_probs["democrat"],
+        "vote_prob_republican": parsed_probs["republican"],
+        "vote_prob_other": parsed_probs["other"],
+        "vote_prob_undecided": parsed_probs["undecided"],
+        "most_likely_choice": choice,
+        "confidence": confidence,
+    }

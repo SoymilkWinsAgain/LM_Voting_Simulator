@@ -171,3 +171,91 @@ def write_individual_report(
     out = run_dir / "eval_report.md"
     out.write_text("\n".join(lines), encoding="utf-8")
     return out
+
+
+def write_ces_eval_report(
+    *,
+    run_id: str,
+    run_dir: str | Path,
+    agents: pd.DataFrame,
+    prompts: pd.DataFrame,
+    responses: pd.DataFrame,
+    individual_metrics: pd.DataFrame,
+    aggregate: pd.DataFrame,
+    aggregate_metrics: pd.DataFrame,
+    memory_policy: str,
+    weight_column: str,
+    leakage_audit: pd.DataFrame | None = None,
+) -> Path:
+    run_dir = Path(run_dir)
+    parse_summary = responses.groupby("parse_status").size().reset_index(name="n")
+    state_summary = agents.groupby("state_po").size().reset_index(name="n_agents")
+    fact_counts = prompts["memory_fact_ids_used"].map(lambda value: len(value) if isinstance(value, list) else 0)
+    metric_cols = ["metric_scope", "baseline", "model_name", "metric_name", "metric_value"]
+    leakage_table = pd.DataFrame()
+    if leakage_audit is not None and not leakage_audit.empty:
+        leakage_table = leakage_audit[leakage_audit["excluded"].astype(bool)].head(20)
+    lines = [
+        f"# CES 2024 Smoke Report: {run_id}",
+        "",
+        "## Run metadata",
+        f"- Run ID: `{run_id}`",
+        f"- Agents: {len(agents)}",
+        f"- Prompts: {len(prompts)}",
+        f"- Responses: {len(responses)}",
+        f"- Memory policy: `{memory_policy}`",
+        f"- Weight column: `{weight_column}`",
+        "",
+        "## Population summary",
+        _markdown_table(state_summary),
+        "",
+        "## Prompt fact coverage",
+        f"- Mean facts per prompt: {fact_counts.mean():.2f}" if len(fact_counts) else "- Mean facts per prompt: 0.00",
+        f"- Max facts in a prompt: {int(fact_counts.max())}" if len(fact_counts) else "- Max facts in a prompt: 0",
+        "",
+        "## Parse status",
+        _markdown_table(parse_summary),
+        "",
+        "## Individual metrics",
+        _markdown_table(individual_metrics[[col for col in metric_cols if col in individual_metrics.columns]]),
+        "",
+        "## Aggregate state results",
+        _markdown_table(
+            aggregate[
+                [
+                    col
+                    for col in [
+                        "state_po",
+                        "baseline",
+                        "n_agents",
+                        "expected_turnout",
+                        "dem_share_2p",
+                        "rep_share_2p",
+                        "margin_2p",
+                        "winner",
+                    ]
+                    if col in aggregate.columns
+                ]
+            ]
+        ),
+        "",
+        "## Aggregate metrics",
+        _markdown_table(aggregate_metrics[[col for col in metric_cols if col in aggregate_metrics.columns]]),
+        "",
+        "## Leakage diagnostics",
+        _markdown_table(
+            leakage_table[["source_variable", "policy", "excluded", "reason"]]
+            if not leakage_table.empty
+            else leakage_table
+        ),
+        "",
+        "## Prompt preview",
+        "See `prompt_preview.md` in this run directory.",
+        "",
+        "## Known limitations",
+        "Phase 1 smoke uses a small respondent sample and mock provider by default; aggregate metrics against MIT are not required unless configured separately.",
+        "",
+    ]
+    out = run_dir / "eval_report.md"
+    out.write_text("\n".join(lines), encoding="utf-8")
+    return out

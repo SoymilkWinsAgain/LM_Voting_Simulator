@@ -1,0 +1,25 @@
+targets:
+  - target_id: turnout_2024_self_report
+    source_variable: CC24_401
+    target_type: turnout
+    truth_source: ces_post_self_report
+    canonical_transform: ces_turnout_self_report
+    weight_column_recommended: commonpostweight
+  - target_id: president_vote_2024
+    source_variable: CC24_410
+    target_type: vote_choice
+    truth_source: ces_post_self_report
+    canonical_transform: ces_president_vote_choice
+    weight_column_recommended: commonpostweight
+  - target_id: president_preference_2024_nonvoter
+    source_variable: CC24_410_nv
+    target_type: preference
+    truth_source: ces_post_self_report
+    canonical_transform: ces_president_nonvoter_preference
+    weight_column_recommended: commonpostweight
+  - target_id: turnout_2024_validated
+    source_variable: TS_g2024
+    target_type: turnout
+    truth_source: targetsmart_validation
+    canonical_transform: ces_validated_turnout
+    weight_column_recommended: vvweight_post

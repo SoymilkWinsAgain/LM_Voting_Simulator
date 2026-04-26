@@ -8,19 +8,19 @@ from typing import Any
 
 import pandas as pd
 
-from .aggregation import write_aggregate_state_results
+from .aggregation import write_aggregate_state_results, write_turnout_vote_state_results
 from .anes import build_anes, build_memory_cards
 from .baselines import LLMBaseline, build_baselines
 from .ces import build_ces_cells
 from .config import RunConfig, load_cell_schema, load_run_config
-from .evaluation import write_eval_metrics
+from .evaluation import empty_aggregate_metrics, write_eval_metrics, write_individual_turnout_vote_metrics
 from .io import ensure_dir, stable_json, write_table
 from .llm import build_llm_client
 from .mit import build_mit_results
-from .population import agent_response_id, build_agents_from_frames
-from .prompts import build_prompt, options_from_question, parse_json_answer
+from .population import agent_response_id, build_agents_from_ces_rows, build_agents_from_frames
+from .prompts import build_ces_prompt, build_prompt, options_from_question, parse_json_answer, parse_turnout_vote_json
 from .questions import load_question_config
-from .report import write_eval_report, write_individual_report
+from .report import write_ces_eval_report, write_eval_report, write_individual_report
 from .transforms import stable_hash
 
 
@@ -30,16 +30,55 @@ def _path(cfg: RunConfig, key: str) -> Path:
     return Path(cfg.paths[key])
 
 
+def _memory_config(cfg: RunConfig) -> dict[str, Any]:
+    if cfg.model_extra and isinstance(cfg.model_extra.get("memory"), dict):
+        return cfg.model_extra["memory"]
+    return cfg.anes_memory
+
+
 def _memory_policy(cfg: RunConfig) -> str:
-    return cfg.anes_memory.get("memory_policy", "safe_survey_memory_v1")
+    memory_cfg = _memory_config(cfg)
+    default = "strict_pre_no_vote_v1" if cfg.mode == "ces_election_simulation" else "safe_survey_memory_v1"
+    return memory_cfg.get("memory_policy", memory_cfg.get("policy", default))
 
 
 def _max_memory_facts(cfg: RunConfig) -> int:
-    return int(cfg.anes_memory.get("max_memory_facts", cfg.anes_memory.get("max_facts", 24)))
+    memory_cfg = _memory_config(cfg)
+    return int(memory_cfg.get("max_memory_facts", memory_cfg.get("max_facts", 24)))
 
 
 def _question_bank_path(cfg: RunConfig, default_path: Path) -> Path:
     return _path(cfg, "question_set") if "question_set" in cfg.paths else default_path
+
+
+def _write_prompt_preview(
+    *,
+    run_dir: Path,
+    run_id: str,
+    summary_rows: list[tuple[str, Any]],
+    prompt_text: str,
+    raw_response: str,
+) -> Path:
+    lines = [f"# Prompt Preview: {run_id}", ""]
+    lines.extend(f"- {label}: `{value}`" for label, value in summary_rows)
+    lines.extend(
+        [
+            "",
+            "## Prompt",
+            "```text",
+            prompt_text,
+            "```",
+            "",
+            "## Raw response",
+            "```text",
+            raw_response,
+            "```",
+            "",
+        ]
+    )
+    out = run_dir / "prompt_preview.md"
+    out.write_text("\n".join(lines), encoding="utf-8")
+    return out
 
 
 def _build_anes_artifacts(cfg: RunConfig, out_dir: Path) -> dict[str, Path]:
@@ -203,7 +242,7 @@ def _agent_from_anes_respondent(cfg: RunConfig, respondent: pd.Series) -> pd.Dat
         "cell_schema": "anes_individual_v1",
         "cell_id": f"ANES|{respondent['anes_id']}",
         "base_anes_id": respondent["anes_id"],
-        "memory_card_id": f"{respondent['anes_id']}_{cfg.anes_memory.get('memory_policy', 'safe_survey_memory_v1')}",
+        "memory_card_id": f"{respondent['anes_id']}_{_memory_policy(cfg)}",
         "match_level": 0,
         "match_distance": 0.0,
         "sample_weight": 1.0,
@@ -333,28 +372,19 @@ def run_individual_benchmark(run_config_path: str | Path) -> dict[str, Path]:
     write_table(responses, responses_path)
     write_table(metrics, metrics_path)
 
-    preview = [
-        f"# Prompt Preview: {cfg.run_id}",
-        "",
-        f"- Agent ID: `{agent['agent_id']}`",
-        f"- Base ANES ID: `{agent['base_anes_id']}`",
-        f"- Target answer: `{target_answer}`",
-        f"- Parsed answer: `{parsed['answer']}`",
-        f"- Parse status: `{parsed['parse_status']}`",
-        "",
-        "## Prompt",
-        "```text",
-        prompt_text,
-        "```",
-        "",
-        "## Raw response",
-        "```text",
-        pred.raw_response,
-        "```",
-        "",
-    ]
-    prompt_preview_path = run_dir / "prompt_preview.md"
-    prompt_preview_path.write_text("\n".join(preview), encoding="utf-8")
+    prompt_preview_path = _write_prompt_preview(
+        run_dir=run_dir,
+        run_id=cfg.run_id,
+        summary_rows=[
+            ("Agent ID", agent["agent_id"]),
+            ("Base ANES ID", agent["base_anes_id"]),
+            ("Target answer", target_answer),
+            ("Parsed answer", parsed["answer"]),
+            ("Parse status", parsed["parse_status"]),
+        ],
+        prompt_text=prompt_text,
+        raw_response=pred.raw_response,
+    )
     report = write_individual_report(
         run_id=cfg.run_id,
         run_dir=run_dir,
@@ -373,10 +403,189 @@ def run_individual_benchmark(run_config_path: str | Path) -> dict[str, Path]:
     }
 
 
+def _ces_response_record(
+    *,
+    cfg: RunConfig,
+    prompt_id: str,
+    agent: pd.Series,
+    question_id: str,
+    baseline: str,
+    model_name: str,
+    raw_response: str,
+    parsed: dict[str, Any],
+) -> dict[str, Any]:
+    vote_probs = {
+        "democrat": parsed.get("vote_prob_democrat"),
+        "republican": parsed.get("vote_prob_republican"),
+        "other": parsed.get("vote_prob_other"),
+        "undecided": parsed.get("vote_prob_undecided"),
+    }
+    return {
+        "run_id": cfg.run_id,
+        "response_id": agent_response_id(cfg.run_id, agent["agent_id"], question_id, baseline),
+        "prompt_id": prompt_id,
+        "agent_id": agent["agent_id"],
+        "base_anes_id": None,
+        "base_ces_id": agent["base_ces_id"],
+        "question_id": question_id,
+        "task_id": "president_turnout_vote",
+        "baseline": baseline,
+        "model_name": model_name,
+        "raw_response": raw_response,
+        "parsed_answer_code": parsed.get("most_likely_choice"),
+        "parsed_answer_label": parsed.get("most_likely_choice"),
+        "confidence": parsed.get("confidence"),
+        "parse_status": parsed.get("parse_status", "failed"),
+        "repair_attempts": 0,
+        "latency_ms": None,
+        "cost_usd": None,
+        "probabilities_json": stable_json(vote_probs),
+        "turnout_probability": parsed.get("turnout_probability"),
+        "vote_prob_democrat": parsed.get("vote_prob_democrat"),
+        "vote_prob_republican": parsed.get("vote_prob_republican"),
+        "vote_prob_other": parsed.get("vote_prob_other"),
+        "vote_prob_undecided": parsed.get("vote_prob_undecided"),
+        "most_likely_choice": parsed.get("most_likely_choice"),
+        "created_at": pd.Timestamp.now(tz="UTC"),
+    }
+
+
+def run_ces_election_simulation(run_config_path: str | Path) -> dict[str, Path]:
+    cfg = load_run_config(run_config_path)
+    run_dir = ensure_dir(cfg.run_dir)
+    respondents = pd.read_parquet(_path(cfg, "ces_respondents"))
+    targets = pd.read_parquet(_path(cfg, "ces_targets"))
+    context = pd.read_parquet(_path(cfg, "ces_context"))
+    memory_facts = pd.read_parquet(_path(cfg, "ces_memory_facts"))
+    memory_cards = pd.read_parquet(_path(cfg, "ces_memory_cards"))
+    questions = load_question_config(_path(cfg, "question_set"))
+    question = questions.iloc[0]
+
+    agents = build_agents_from_ces_rows(cfg, respondents, memory_cards)
+    agents_path = run_dir / "agents.parquet"
+    write_table(agents, agents_path)
+
+    llm_client = build_llm_client(cfg.model)
+    model_name = getattr(llm_client, "model_name", cfg.model.model_name)
+    baseline_names = cfg.baselines or ["survey_memory_llm"]
+    memory_policy = _memory_policy(cfg)
+    max_memory = _max_memory_facts(cfg)
+    prompt_rows: list[dict[str, Any]] = []
+    response_rows: list[dict[str, Any]] = []
+    for baseline_name in baseline_names:
+        if baseline_name not in {"survey_memory_llm", "demographic_only_llm", "party_ideology_llm"}:
+            raise ValueError(f"CES smoke supports LLM baselines only, got {baseline_name}")
+        for _, agent in agents.iterrows():
+            prompt_text, fact_ids = build_ces_prompt(
+                agent,
+                question,
+                memory_facts=memory_facts,
+                context=context,
+                memory_policy=memory_policy,
+                max_memory_facts=max_memory,
+            )
+            prompt = _prompt_record(
+                cfg=cfg,
+                agent=agent,
+                question=question,
+                baseline=baseline_name,
+                model_name=model_name,
+                prompt_text=prompt_text,
+                fact_ids=fact_ids,
+            )
+            raw = llm_client.complete(prompt_text, ["democrat", "republican", "other", "undecided", "not_vote"])
+            parsed = parse_turnout_vote_json(raw)
+            prompt_rows.append(prompt)
+            response_rows.append(
+                _ces_response_record(
+                    cfg=cfg,
+                    prompt_id=prompt["prompt_id"],
+                    agent=agent,
+                    question_id=question["question_id"],
+                    baseline=baseline_name,
+                    model_name=model_name,
+                    raw_response=raw,
+                    parsed=parsed,
+                )
+            )
+
+    prompts = pd.DataFrame(prompt_rows)
+    responses = pd.DataFrame(response_rows)
+    prompts_path = run_dir / "prompts.parquet"
+    responses_path = run_dir / "responses.parquet"
+    write_table(prompts, prompts_path)
+    write_table(responses, responses_path)
+
+    individual_cfg = cfg.evaluation.get("individual", {})
+    individual_metrics = write_individual_turnout_vote_metrics(
+        responses,
+        targets,
+        cfg.run_id,
+        run_dir / "individual_eval_metrics.parquet",
+        turnout_target_id=individual_cfg.get("turnout_truth", "turnout_2024_self_report"),
+        vote_target_id=individual_cfg.get("vote_truth", "president_vote_2024"),
+    )
+    aggregate = write_turnout_vote_state_results(
+        responses,
+        agents,
+        cfg.run_id,
+        int(cfg.scenario.year),
+        run_dir / "aggregate_state_results.parquet",
+        office=cfg.scenario.office,
+    )
+    aggregate_metrics = empty_aggregate_metrics(cfg.run_id)
+    aggregate_metrics_path = run_dir / "aggregate_eval_metrics.parquet"
+    write_table(aggregate_metrics, aggregate_metrics_path)
+
+    prompt_preview_path = _write_prompt_preview(
+        run_dir=run_dir,
+        run_id=cfg.run_id,
+        summary_rows=[
+            ("Agent ID", agents.iloc[0]["agent_id"]),
+            ("Base CES ID", agents.iloc[0]["base_ces_id"]),
+            ("Parse status", responses.iloc[0]["parse_status"]),
+            ("Most likely choice", responses.iloc[0]["most_likely_choice"]),
+        ],
+        prompt_text=prompts.iloc[0]["prompt_text"],
+        raw_response=responses.iloc[0]["raw_response"],
+    )
+
+    leakage_audit = None
+    audit_path = cfg.paths.get("ces_leakage_audit")
+    if audit_path:
+        leakage_audit = pd.read_parquet(audit_path)
+    weight_column = agents["weight_column"].dropna().astype(str).iloc[0] if agents["weight_column"].notna().any() else ""
+    report = write_ces_eval_report(
+        run_id=cfg.run_id,
+        run_dir=run_dir,
+        agents=agents,
+        prompts=prompts,
+        responses=responses,
+        individual_metrics=individual_metrics,
+        aggregate=aggregate,
+        aggregate_metrics=aggregate_metrics,
+        memory_policy=memory_policy,
+        weight_column=weight_column,
+        leakage_audit=leakage_audit,
+    )
+    return {
+        "agents": agents_path,
+        "prompts": prompts_path,
+        "prompt_preview": prompt_preview_path,
+        "responses": responses_path,
+        "individual_metrics": run_dir / "individual_eval_metrics.parquet",
+        "aggregate": run_dir / "aggregate_state_results.parquet",
+        "aggregate_metrics": aggregate_metrics_path,
+        "report": report,
+    }
+
+
 def run_simulation(run_config_path: str | Path) -> dict[str, Path]:
     cfg = load_run_config(run_config_path)
     if cfg.mode == "individual_benchmark":
         return run_individual_benchmark(run_config_path)
+    if cfg.mode == "ces_election_simulation":
+        return run_ces_election_simulation(run_config_path)
     run_dir = ensure_dir(cfg.run_dir)
     processed = ensure_processed_inputs(cfg)
 

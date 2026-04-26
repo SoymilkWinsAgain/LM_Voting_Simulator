@@ -7,13 +7,22 @@ __pycache__/
 data/processed/
 data/runs/
 
-# Keep small fixture data trackable, but never commit real/raw survey datasets.
-data/raw/anes/**/*.csv
-data/raw/anes/**/*.pdf
-data/raw/anes/**/*.dta
-data/raw/anes/**/*.sav
-data/raw/anes/**/*.zip
-data/raw/anes/**/*.Zone.Identifier
+# Keep small fixture data and helper scripts trackable, but never commit real/raw datasets.
+data/raw/**/*.csv
+data/raw/**/*.pdf
+data/raw/**/*.doc
+data/raw/**/*.docx
+data/raw/**/*.dta
+data/raw/**/*.sav
+data/raw/**/*.sas7bdat
+data/raw/**/*.rds
+data/raw/**/*.xlsx
+data/raw/**/*.xls
+data/raw/**/*.zip
+data/raw/**/*.Zone.Identifier
+!data/raw/fixture/**
+!data/raw/**/README.md
+!data/raw/**/*.py
 *:Zone.Identifier
 
 .env

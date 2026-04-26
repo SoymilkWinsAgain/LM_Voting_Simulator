@@ -5,15 +5,16 @@ import sys
 
 import pandas as pd
 
-from election_sim.aggregation import aggregate_state_results
+from election_sim.aggregation import aggregate_state_results, aggregate_turnout_vote_state_results
 from election_sim.anes import LeakageGuard, build_anes, build_memory_cards
-from election_sim.ces import build_ces_cells
-from election_sim.config import load_cell_schema, load_run_config
+from election_sim.ces import build_ces, build_ces_cells, build_ces_memory_cards
+from election_sim.config import RunConfig, load_cell_schema, load_run_config
 from election_sim.evaluation import election_metrics
 from election_sim.gdelt import load_context_cards, select_context_cards
+from election_sim.io import load_yaml
 from election_sim.mit import normalize_mit_results, state_truth_table
-from election_sim.population import build_agents_from_frames
-from election_sim.prompts import build_prompt, parse_json_answer
+from election_sim.population import build_agents_from_ces_rows, build_agents_from_frames
+from election_sim.prompts import build_prompt, parse_json_answer, parse_turnout_vote_json
 from election_sim.questions import load_question_config
 from election_sim.simulation import run_simulation
 from election_sim.transforms import (
@@ -22,9 +23,19 @@ from election_sim.transforms import (
     anes_2024_hispanic_to_race_ethnicity,
     anes_2024_party_id_to_party3,
     anes_vote_choice_president,
+    ces_education_binary,
+    ces_gender4,
+    ces_ideo5_to_ideology3,
+    ces_pid3_to_party3,
+    ces_president_nonvoter_preference,
+    ces_president_vote_choice,
+    ces_race_ethnicity,
+    ces_turnout_self_report,
+    ces_validated_turnout,
     education_to_binary,
     ideology7_to_ideology3,
     party7_to_party3,
+    state_fips_to_po,
 )
 
 
@@ -48,6 +59,20 @@ def test_category_mapping_helpers():
     assert anes_vote_choice_president(2) == "republican"
     assert anes_vote_choice_president(6) == "other"
     assert anes_vote_choice_president(-1) == "not_vote_or_unknown"
+    assert state_fips_to_po(42) == "PA"
+    assert ces_gender4(3) == "non_binary"
+    assert ces_education_binary(5) == "college_plus"
+    assert ces_race_ethnicity(1, 2) == "white"
+    assert ces_race_ethnicity(1, 1) == "hispanic"
+    assert ces_pid3_to_party3(2) == "republican"
+    assert ces_ideo5_to_ideology3(4) == "conservative"
+    assert ces_turnout_self_report(5) == "voted"
+    assert ces_turnout_self_report(3) == "not_voted"
+    assert ces_president_vote_choice(1) == "democrat"
+    assert ces_president_vote_choice(9) == "not_vote"
+    assert ces_president_nonvoter_preference(9) == "undecided"
+    assert ces_validated_turnout(6) == "voted"
+    assert ces_validated_turnout(7) == "not_voted"
 
 
 def test_anes_profile_crosswalk_maps_categories_correctly(tmp_path):
@@ -138,6 +163,191 @@ def test_ces_weighted_cell_distribution_sums_to_one_by_state(tmp_path):
     sums = dist.groupby("state_po")["weighted_share_smoothed"].sum()
     assert all(abs(value - 1.0) < 1e-9 for value in sums)
     assert dist["smoothing_lambda"].between(0, 1).all()
+
+
+def _write_tiny_ces_fixture(tmp_path):
+    profile = load_yaml("configs/crosswalks/ces_2024_profile.yaml")
+    questions = load_yaml("configs/crosswalks/ces_2024_pre_questions.yaml")
+    targets = load_yaml("configs/crosswalks/ces_2024_targets.yaml")
+    cols = {profile["respondent_id"]}
+    for spec in profile["fields"].values():
+        cols.add(spec["variable"])
+    for question in questions["questions"]:
+        cols.add(question["source_variable"])
+    for target in targets["targets"]:
+        cols.add(target["source_variable"])
+    base = {col: 1 for col in cols}
+    base.update(
+        {
+            "caseid": 101,
+            "tookpost": 2,
+            "inputstate": 42,
+            "birthyr": 1980,
+            "gender4": 2,
+            "educ": 5,
+            "race": 1,
+            "hispanic": 2,
+            "pid3": 1,
+            "pid7": 1,
+            "CC24_pid7": 1,
+            "ideo5": 2,
+            "votereg": 1,
+            "votereg_post": 1,
+            "cit1": 1,
+            "commonweight": 1.0,
+            "commonpostweight": 1.2,
+            "vvweight": 1.1,
+            "vvweight_post": 1.3,
+            "TS_voterstatus": 1,
+            "TS_g2024": 4,
+            "TS_partyreg": 2,
+            "CC24_401": 5,
+            "CC24_410": 1,
+            "CC24_410_nv": None,
+            "CC24_303": 1,
+            "CC24_312a": 4,
+            "CC24_321c": 1,
+            "CC24_323a": 2,
+            "CC24_361b": 2,
+        }
+    )
+    other = dict(base)
+    other.update({"caseid": 102, "pid3": 2, "pid7": 7, "ideo5": 5, "CC24_410": 2, "TS_g2024": 7})
+    raw_path = tmp_path / "ces_tiny.csv"
+    pd.DataFrame([base, other]).to_csv(raw_path, index=False)
+    config_path = tmp_path / "ces_tiny.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "name: ces_2024_tiny",
+                "source: ces",
+                "year: 2024",
+                f"path: {raw_path}",
+                "respondent_id: caseid",
+                "codebook: configs/codebooks/ces_2024_value_labels.yaml",
+                "schema_version: ces_2024_tiny_v1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return config_path
+
+
+def test_build_ces_fixture_outputs_contract_tables(tmp_path):
+    config_path = _write_tiny_ces_fixture(tmp_path)
+    paths = build_ces(
+        config_path,
+        "configs/crosswalks/ces_2024_profile.yaml",
+        "configs/crosswalks/ces_2024_pre_questions.yaml",
+        "configs/crosswalks/ces_2024_targets.yaml",
+        "configs/crosswalks/ces_2024_context.yaml",
+        tmp_path / "ces",
+    )
+    respondents = pd.read_parquet(paths["respondents"])
+    answers = pd.read_parquet(paths["answers"])
+    targets = pd.read_parquet(paths["targets"])
+    context = pd.read_parquet(paths["context"])
+    assert len(respondents) == 2
+    assert respondents.iloc[0]["state_po"] == "PA"
+    assert respondents.iloc[0]["education_binary"] == "college_plus"
+    assert len(answers) > 0
+    assert {"turnout_2024_self_report", "president_vote_2024", "turnout_2024_validated"} <= set(targets["target_id"])
+    assert set(context["candidate_name"]) == {"Kamala Harris", "Donald Trump"}
+
+
+def test_ces_memory_policy_and_row_agents(tmp_path):
+    config_path = _write_tiny_ces_fixture(tmp_path)
+    paths = build_ces(
+        config_path,
+        "configs/crosswalks/ces_2024_profile.yaml",
+        "configs/crosswalks/ces_2024_pre_questions.yaml",
+        "configs/crosswalks/ces_2024_targets.yaml",
+        "configs/crosswalks/ces_2024_context.yaml",
+        tmp_path / "ces",
+    )
+    memory_paths = build_ces_memory_cards(
+        paths["respondents"],
+        paths["answers"],
+        "configs/fact_templates/ces_2024_common_facts.yaml",
+        "strict_pre_no_vote_v1",
+        tmp_path / "ces",
+        max_facts=3,
+    )
+    facts = pd.read_parquet(memory_paths["facts"])
+    cards = pd.read_parquet(memory_paths["cards"])
+    audit = pd.read_parquet(memory_paths["audit"])
+    assert not {"CC24_401", "CC24_410", "TS_g2024"} & set(facts["source_variable"])
+    assert cards["n_facts"].max() <= 3
+    assert audit[audit["source_variable"].isin(["CC24_401", "CC24_410", "TS_g2024"])]["excluded"].all()
+
+    cfg = RunConfig.model_validate(
+        {
+            "run_id": "tiny_ces",
+            "scenario": {"year": 2024, "office": "president", "states": ["PA"]},
+            "population": {
+                "source": "ces_rows",
+                "selection": {"states": ["PA"], "tookpost_required": True, "citizen_required": True},
+                "sampling": {"mode": "weighted_sample", "n_total_agents": 1, "random_seed": 1},
+                "weight": {"column": "weight_common_post"},
+            },
+        }
+    )
+    agents = build_agents_from_ces_rows(cfg, pd.read_parquet(paths["respondents"]), cards)
+    assert len(agents) == 1
+    assert agents.iloc[0]["base_ces_id"] in {"101", "102"}
+    assert agents.iloc[0]["memory_card_id"]
+
+
+def test_turnout_vote_parser_and_aggregation():
+    parsed = parse_turnout_vote_json(
+        json.dumps(
+            {
+                "turnout_probability": 0.8,
+                "vote_probabilities": {"democrat": 0.7, "republican": 0.2, "other": 0.05, "undecided": 0.05},
+                "most_likely_choice": "democrat",
+                "confidence": 0.9,
+            }
+        )
+    )
+    assert parsed["parse_status"] == "ok"
+    assert parsed["most_likely_choice"] == "democrat"
+    assert parse_turnout_vote_json('{"answer": "democrat"}')["parse_status"] == "invalid_schema"
+
+    agents = pd.DataFrame(
+        [
+            {"agent_id": "a1", "state_po": "PA", "sample_weight": 2.0, "weight_column": "w"},
+            {"agent_id": "a2", "state_po": "PA", "sample_weight": 1.0, "weight_column": "w"},
+        ]
+    )
+    responses = pd.DataFrame(
+        [
+            {
+                "agent_id": "a1",
+                "baseline": "b",
+                "model_name": "m",
+                "turnout_probability": 0.5,
+                "vote_prob_democrat": 0.8,
+                "vote_prob_republican": 0.2,
+                "vote_prob_other": 0.0,
+                "vote_prob_undecided": 0.0,
+            },
+            {
+                "agent_id": "a2",
+                "baseline": "b",
+                "model_name": "m",
+                "turnout_probability": 1.0,
+                "vote_prob_democrat": 0.0,
+                "vote_prob_republican": 1.0,
+                "vote_prob_other": 0.0,
+                "vote_prob_undecided": 0.0,
+            },
+        ]
+    )
+    aggregate = aggregate_turnout_vote_state_results(responses, agents, "r", 2024)
+    row = aggregate.iloc[0]
+    assert abs(row["expected_dem_votes"] - 0.8) < 1e-12
+    assert abs(row["expected_rep_votes"] - 1.2) < 1e-12
+    assert abs(row["dem_share_2p"] - 0.4) < 1e-12
 
 
 def test_archetype_matcher_returns_required_count(tmp_path):

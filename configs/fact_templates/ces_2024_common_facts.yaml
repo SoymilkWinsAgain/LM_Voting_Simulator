@@ -1,0 +1,77 @@
+templates:
+  - source_variable: CC24_303
+    topic: inflation
+    priority: 100
+    template: "The respondent says prices of everyday goods and services have {answer_label_lower} over the past year."
+  - source_variable: CC24_312a
+    topic: approval
+    priority: 98
+    template: "The respondent says they {answer_label_lower} of President Biden's job performance."
+  - source_variable: CC24_312i
+    topic: approval
+    priority: 96
+    template: "The respondent says they {answer_label_lower} of Vice President Harris's job performance."
+  - source_variable: CC24_301
+    topic: economy
+    priority: 94
+    template: "The respondent says the nation's economy has {answer_label_lower} over the past year."
+  - source_variable: CC24_302
+    topic: economy
+    priority: 90
+    template: "The respondent says their household income has {answer_label_lower} over the past year."
+  - source_variable: CC24_361b
+    topic: party_registration
+    priority: 88
+    template: "The respondent says their party registration is {answer_label_lower}."
+  - source_variable: CC24_330a
+    topic: ideology_placement
+    priority: 86
+    template: "The respondent places themself ideologically as {answer_label_lower}."
+  - source_variable: CC24_330d
+    topic: ideology_placement
+    priority: 84
+    template: "The respondent places Kamala Harris ideologically as {answer_label_lower}."
+  - source_variable: CC24_330e
+    topic: ideology_placement
+    priority: 84
+    template: "The respondent places Donald Trump ideologically as {answer_label_lower}."
+  - source_variable: CC24_330f
+    topic: ideology_placement
+    priority: 82
+    template: "The respondent places the Democratic Party ideologically as {answer_label_lower}."
+  - source_variable: CC24_330g
+    topic: ideology_placement
+    priority: 82
+    template: "The respondent places the Republican Party ideologically as {answer_label_lower}."
+  - source_variable: CC24_323b
+    topic: immigration
+    priority: 78
+    template: "The respondent says they {answer_label_lower} increasing border patrols on the US-Mexico border."
+  - source_variable: CC24_323c
+    topic: immigration
+    priority: 76
+    template: "The respondent says they {answer_label_lower} building a wall between the U.S. and Mexico."
+  - source_variable: CC24_323a
+    topic: immigration
+    priority: 74
+    template: "The respondent says they {answer_label_lower} granting legal status to long-time working undocumented immigrants without felony convictions."
+  - source_variable: CC24_323d
+    topic: immigration
+    priority: 72
+    template: "The respondent says they {answer_label_lower} permanent resident status and a citizenship pathway for Dreamers."
+  - source_variable: CC24_324a
+    topic: abortion
+    priority: 70
+    template: "The respondent says they {answer_label_lower} always allowing abortion as a matter of choice."
+  - source_variable: CC24_321c
+    topic: guns
+    priority: 68
+    template: "The respondent says they {answer_label_lower} requiring criminal background checks on all gun sales."
+  - source_variable: CC24_326a
+    topic: environment
+    priority: 64
+    template: "The respondent says they {answer_label_lower} giving the EPA power to regulate carbon dioxide emissions."
+  - source_variable: CC24_328a
+    topic: housing
+    priority: 60
+    template: "The respondent says they {answer_label_lower} relaxing local zoning laws to allow more apartments and condos."

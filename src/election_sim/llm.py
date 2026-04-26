@@ -17,6 +17,35 @@ class MockLLMClient:
 
     def complete(self, prompt_text: str, allowed: list[str]) -> str:
         lowered = prompt_text.lower()
+        if "turnout_probability" in lowered and "vote_probabilities" in lowered:
+            if "party identification: democrat" in lowered:
+                probs = {"democrat": 0.76, "republican": 0.14, "other": 0.05, "undecided": 0.05}
+                choice = "democrat"
+                confidence = 0.78
+            elif "party identification: republican" in lowered:
+                probs = {"democrat": 0.14, "republican": 0.76, "other": 0.05, "undecided": 0.05}
+                choice = "republican"
+                confidence = 0.78
+            elif "ideology: conservative" in lowered:
+                probs = {"democrat": 0.22, "republican": 0.62, "other": 0.08, "undecided": 0.08}
+                choice = "republican"
+                confidence = 0.64
+            elif "ideology: liberal" in lowered:
+                probs = {"democrat": 0.62, "republican": 0.22, "other": 0.08, "undecided": 0.08}
+                choice = "democrat"
+                confidence = 0.64
+            else:
+                probs = {"democrat": 0.4, "republican": 0.4, "other": 0.08, "undecided": 0.12}
+                choice = "undecided"
+                confidence = 0.45
+            return json.dumps(
+                {
+                    "turnout_probability": 0.86,
+                    "vote_probabilities": probs,
+                    "most_likely_choice": choice,
+                    "confidence": confidence,
+                }
+            )
         if "party identification: democrat" in lowered:
             answer = "democrat"
             confidence = 0.82

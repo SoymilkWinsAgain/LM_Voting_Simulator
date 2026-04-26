@@ -1,0 +1,60 @@
+run_id: ces_2024_president_one_agent_ollama
+seed: 20260426
+mode: ces_election_simulation
+
+scenario:
+  year: 2024
+  office: president
+  election_day: "2024-11-05"
+  states: ["PA"]
+  level: respondent
+
+population:
+  source: ces_rows
+  selection:
+    states: ["PA"]
+    tookpost_required: true
+    citizen_required: true
+  sampling:
+    mode: weighted_sample
+    n_total_agents: 1
+    random_seed: 2024
+  weight:
+    column: weight_common_post
+
+memory:
+  source: ces
+  memory_policy: strict_pre_no_vote_v1
+  max_memory_facts: 24
+
+baselines:
+  - survey_memory_llm
+
+model:
+  provider: ollama
+  base_url: http://172.26.48.1:11434
+  model_name: qwen3.5:9b-q4_K_M
+  temperature: 0.0
+  max_tokens: 400
+  response_format: json
+  cache_enabled: true
+
+evaluation:
+  individual:
+    enabled: true
+    turnout_truth: turnout_2024_self_report
+    vote_truth: president_vote_2024
+  aggregate:
+    enabled: false
+
+paths:
+  processed_dir: data/processed/ces/2024_common_vv
+  run_dir: data/runs/ces_2024_president_one_agent_ollama
+  ces_respondents: data/processed/ces/2024_common_vv/ces_respondents.parquet
+  ces_answers: data/processed/ces/2024_common_vv/ces_answers.parquet
+  ces_targets: data/processed/ces/2024_common_vv/ces_targets.parquet
+  ces_context: data/processed/ces/2024_common_vv/ces_context.parquet
+  ces_memory_cards: data/processed/ces/2024_common_vv/ces_memory_cards.parquet
+  ces_memory_facts: data/processed/ces/2024_common_vv/ces_memory_facts.parquet
+  ces_leakage_audit: data/processed/ces/2024_common_vv/ces_leakage_audit.parquet
+  question_set: configs/questions/ces_2024_president_turnout_vote.yaml
