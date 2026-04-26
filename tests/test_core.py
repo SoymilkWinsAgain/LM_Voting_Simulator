@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 
 import pandas as pd
 
@@ -14,7 +15,17 @@ from election_sim.mit import normalize_mit_results, state_truth_table
 from election_sim.population import build_agents_from_frames
 from election_sim.prompts import build_prompt, parse_json_answer
 from election_sim.questions import load_question_config
-from election_sim.transforms import age_to_group, education_to_binary, ideology7_to_ideology3, party7_to_party3
+from election_sim.simulation import run_simulation
+from election_sim.transforms import (
+    age_to_group,
+    anes_2024_education_to_binary,
+    anes_2024_hispanic_to_race_ethnicity,
+    anes_2024_party_id_to_party3,
+    anes_vote_choice_president,
+    education_to_binary,
+    ideology7_to_ideology3,
+    party7_to_party3,
+)
 
 
 RUN_CONFIG = "configs/runs/first_e2e_2024_pa_fixture.yaml"
@@ -26,6 +37,17 @@ def test_category_mapping_helpers():
     assert education_to_binary("college_plus") == "college_plus"
     assert party7_to_party3("republican") == "republican"
     assert ideology7_to_ideology3("liberal") == "liberal"
+    assert anes_2024_education_to_binary(12) == "non_college"
+    assert anes_2024_education_to_binary(13) == "college_plus"
+    assert anes_2024_hispanic_to_race_ethnicity(1) == "hispanic"
+    assert anes_2024_hispanic_to_race_ethnicity(2) == "other_or_unknown"
+    assert anes_2024_party_id_to_party3(1) == "democrat"
+    assert anes_2024_party_id_to_party3(2) == "republican"
+    assert anes_2024_party_id_to_party3(3) == "independent_or_other"
+    assert anes_vote_choice_president(1) == "democrat"
+    assert anes_vote_choice_president(2) == "republican"
+    assert anes_vote_choice_president(6) == "other"
+    assert anes_vote_choice_president(-1) == "not_vote_or_unknown"
 
 
 def test_anes_profile_crosswalk_maps_categories_correctly(tmp_path):
@@ -250,3 +272,91 @@ def test_gdelt_context_card_time_leakage_filter():
     blocked = select_context_cards(cards, year=2024, states=["PA"], simulation_date="2024-10-01")
     assert len(allowed) == 1
     assert blocked.empty
+
+
+def test_real_anes_2024_questionnaire_parser_finds_curated_variables():
+    sys.path.insert(0, "data/raw/anes")
+    import parse_anes_questionnaire as parser
+
+    schema = parser.parse_pdf("data/raw/anes/2024/anes_2024_questionnaire.pdf")
+    for variable in ["V241049", "V242067", "V241221", "V241177", "V241463"]:
+        assert variable in schema["variables"]
+
+
+def test_real_anes_2020_questionnaire_parser_has_legacy_fallback():
+    sys.path.insert(0, "data/raw/anes")
+    import parse_anes_questionnaire as parser
+
+    schema = parser.parse_pdf("data/raw/anes/2020/anes_timeseries_2020_questionnaire.pdf")
+    assert schema["n_items"] > 0
+    assert "V202072" in schema["variables"]
+
+
+def test_real_anes_2024_profile_crosswalk_maps_minimal_categories(tmp_path):
+    paths = build_anes(
+        "configs/datasets/anes_2024_real_min.yaml",
+        "configs/crosswalks/anes_2024_real_min_profile.yaml",
+        "configs/crosswalks/anes_2024_real_min_questions.yaml",
+        tmp_path / "anes_real",
+    )
+    respondents = pd.read_parquet(paths["respondents"])
+    answers = pd.read_parquet(paths["answers"])
+    assert len(respondents) == 5521
+    assert set(respondents["race_ethnicity"]) <= {"hispanic", "other_or_unknown"}
+    assert set(respondents["education_binary"]) <= {"non_college", "college_plus", "unknown"}
+    assert "V241500a" not in set(answers["source_variable"])
+    target = answers[answers["source_variable"] == "V242067"]
+    assert {"democrat", "republican", "other", "not_vote_or_unknown"} == set(target["canonical_value"])
+
+
+def test_real_anes_leakage_guard_removes_pre_and_post_vote_choice():
+    question = load_question_config("configs/questions/vote_choice_2024_real_anes.yaml").iloc[0]
+    facts = pd.DataFrame(
+        [
+            {
+                "anes_id": "1",
+                "memory_fact_id": "economy",
+                "source_variable": "V241236",
+                "topic": "economy",
+                "fact_text": "Allowed economy fact.",
+                "safe_as_memory": True,
+                "allowed_memory_policies": ["safe_survey_memory_v1"],
+                "excluded_target_question_ids": [],
+                "excluded_target_topics": [],
+            },
+            {
+                "anes_id": "1",
+                "memory_fact_id": "pre_vote",
+                "source_variable": "V241049",
+                "topic": "vote_choice",
+                "fact_text": "Pre vote intent leak.",
+                "safe_as_memory": True,
+                "allowed_memory_policies": ["safe_survey_memory_v1"],
+                "excluded_target_question_ids": ["vote_choice_president_2024"],
+                "excluded_target_topics": ["vote_choice"],
+            },
+            {
+                "anes_id": "1",
+                "memory_fact_id": "post_vote",
+                "source_variable": "V242067",
+                "topic": "vote_choice",
+                "fact_text": "Post vote leak.",
+                "safe_as_memory": False,
+                "allowed_memory_policies": [],
+                "excluded_target_question_ids": ["vote_choice_president_2024"],
+                "excluded_target_topics": ["vote_choice"],
+            },
+        ]
+    )
+    filtered = LeakageGuard().filter_facts(facts, question, "safe_survey_memory_v1")
+    assert filtered["memory_fact_id"].tolist() == ["economy"]
+
+
+def test_real_anes_one_agent_mock_smoke_writes_prompt_response_report():
+    outputs = run_simulation("configs/runs/real_anes_2024_one_agent_mock.yaml")
+    responses = pd.read_parquet(outputs["responses"])
+    assert len(responses) == 1
+    assert responses.iloc[0]["baseline"] == "survey_memory_llm"
+    assert responses.iloc[0]["parse_status"] == "ok"
+    assert outputs["prompt_preview"].read_text(encoding="utf-8").count("Additional survey-derived background facts") == 1
+    assert outputs["report"].exists()

@@ -24,8 +24,37 @@ conda run -n jigsaw python -m election_sim.cli validate-config \
 conda run -n jigsaw python -m pytest
 ```
 
+Real ANES 2024 one-agent smoke run:
+
+```bash
+conda run -n jigsaw python -m election_sim.cli build-anes \
+  --config configs/datasets/anes_2024_real_min.yaml \
+  --profile-crosswalk configs/crosswalks/anes_2024_real_min_profile.yaml \
+  --question-crosswalk configs/crosswalks/anes_2024_real_min_questions.yaml \
+  --out data/processed/anes/2024_real_min
+
+conda run -n jigsaw python -m election_sim.cli build-anes-memory \
+  --respondents data/processed/anes/2024_real_min/anes_respondents.parquet \
+  --answers data/processed/anes/2024_real_min/anes_answers.parquet \
+  --fact-templates configs/fact_templates/anes_2024_real_min_facts.yaml \
+  --policy safe_survey_memory_v1 \
+  --out data/processed/anes/2024_real_min \
+  --max-facts 6
+
+conda run -n jigsaw python -m election_sim.cli run-simulation \
+  --run-config configs/runs/real_anes_2024_one_agent_ollama.yaml
+```
+
+The real ANES prompt and model response are written to:
+
+```text
+data/runs/real_anes_2024_one_agent_ollama/prompt_preview.md
+```
+
 The default fixture run uses `model.provider: mock` so tests stay deterministic.
-To run against Windows Ollama from WSL, set the run config model block to:
+Ollama uses the native `/api/chat` endpoint so Qwen thinking can be disabled
+and JSON output stays parseable. To run against Windows Ollama from WSL, set
+the run config model block to:
 
 ```yaml
 model:

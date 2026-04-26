@@ -1,0 +1,241 @@
+questions:
+  - question_id: ideology_self_2024
+    source: anes
+    source_year: 2024
+    source_variable: V241177
+    wave: pre
+    topic: ideology
+    subtopic: self_placement
+    question_text: "Where would the respondent place themself on the liberal-conservative scale?"
+    options:
+      liberal: "Liberal"
+      moderate: "Moderate"
+      conservative: "Conservative"
+      unknown: "Unknown or not thought much about it"
+    canonical_transform: ideology7_to_ideology3
+    canonical_target_type: categorical
+    is_vote_choice: false
+    is_candidate_eval: false
+    is_party_eval: false
+    is_issue_position: false
+  - question_id: party_id_2024
+    source: anes
+    source_year: 2024
+    source_variable: V241221
+    wave: pre
+    topic: party_identification
+    subtopic: party_id
+    question_text: "Generally speaking, does the respondent think of themself as a Democrat, Republican, independent, or something else?"
+    options:
+      democrat: "Democrat"
+      republican: "Republican"
+      independent_or_other: "Independent or other"
+      unknown: "Unknown"
+    canonical_transform: anes_2024_party_id_to_party3
+    canonical_target_type: categorical
+    is_vote_choice: false
+    is_candidate_eval: false
+    is_party_eval: false
+    is_issue_position: false
+  - question_id: party_identity_importance_2024
+    source: anes
+    source_year: 2024
+    source_variable: V241228
+    wave: pre
+    topic: party_identification
+    subtopic: identity_importance
+    question_text: "How important is party identification to the respondent's identity?"
+    options:
+      extremely_important: "Extremely important"
+      very_important: "Very important"
+      moderately_important: "Moderately important"
+      a_little_important: "A little important"
+      not_important: "Not at all important"
+      unknown: "Unknown"
+    value_mapping:
+      1: extremely_important
+      2: very_important
+      3: moderately_important
+      4: a_little_important
+      5: not_important
+      -1: unknown
+      -8: unknown
+      -9: unknown
+    canonical_target_type: categorical
+    is_vote_choice: false
+    is_candidate_eval: false
+    is_party_eval: false
+    is_issue_position: false
+  - question_id: elections_responsiveness_2024
+    source: anes
+    source_year: 2024
+    source_variable: V241235
+    wave: pre
+    topic: political_efficacy
+    subtopic: election_responsiveness
+    question_text: "How much does the respondent feel elections make government pay attention?"
+    options:
+      good_deal: "A good deal"
+      some: "Some"
+      not_much: "Not much"
+      unknown: "Unknown"
+    value_mapping:
+      1: good_deal
+      2: some
+      3: not_much
+      -1: unknown
+      -8: unknown
+      -9: unknown
+    canonical_target_type: categorical
+    is_vote_choice: false
+    is_candidate_eval: false
+    is_party_eval: false
+    is_issue_position: false
+  - question_id: party_economy_2024
+    source: anes
+    source_year: 2024
+    source_variable: V241236
+    wave: pre
+    topic: economy
+    subtopic: party_performance
+    question_text: "Which party would do a better job handling the nation's economy?"
+    options:
+      democrats_much_better: "Democrats would do a much better job"
+      democrats_somewhat_better: "Democrats would do a somewhat better job"
+      no_difference: "Not much difference"
+      republicans_somewhat_better: "Republicans would do a somewhat better job"
+      republicans_much_better: "Republicans would do a much better job"
+      unknown: "Unknown"
+    value_mapping:
+      1: democrats_much_better
+      2: democrats_somewhat_better
+      3: no_difference
+      4: republicans_somewhat_better
+      5: republicans_much_better
+      -8: unknown
+      -9: unknown
+    canonical_target_type: categorical
+    is_vote_choice: false
+    is_candidate_eval: false
+    is_party_eval: false
+    is_issue_position: true
+  - question_id: party_immigration_2024
+    source: anes
+    source_year: 2024
+    source_variable: V241237
+    wave: pre
+    topic: immigration
+    subtopic: party_performance
+    question_text: "Which party would do a better job handling immigration?"
+    options:
+      democrats_much_better: "Democrats would do a much better job"
+      democrats_somewhat_better: "Democrats would do a somewhat better job"
+      no_difference: "Not much difference"
+      republicans_somewhat_better: "Republicans would do a somewhat better job"
+      republicans_much_better: "Republicans would do a much better job"
+      unknown: "Unknown"
+    value_mapping:
+      1: democrats_much_better
+      2: democrats_somewhat_better
+      3: no_difference
+      4: republicans_somewhat_better
+      5: republicans_much_better
+      -8: unknown
+      -9: unknown
+    canonical_target_type: categorical
+    is_vote_choice: false
+    is_candidate_eval: false
+    is_party_eval: false
+    is_issue_position: true
+  - question_id: immigration_policy_2024
+    source: anes
+    source_year: 2024
+    source_variable: V241386
+    wave: pre
+    topic: immigration
+    subtopic: unauthorized_immigrants
+    question_text: "Which policy toward unauthorized immigrants is closest to the respondent's view?"
+    options:
+      deport_felons: "Make unauthorized immigrants felons and send them back"
+      guest_worker: "Guest worker program"
+      citizenship_requirements: "Citizenship with requirements"
+      citizenship_no_penalties: "Citizenship without penalties"
+      unknown: "Unknown"
+    value_mapping:
+      1: deport_felons
+      2: guest_worker
+      3: citizenship_requirements
+      4: citizenship_no_penalties
+      -1: unknown
+      -8: unknown
+      -9: unknown
+    canonical_target_type: categorical
+    is_vote_choice: false
+    is_candidate_eval: false
+    is_party_eval: false
+    is_issue_position: true
+  - question_id: childhood_arrivals_2024
+    source: anes
+    source_year: 2024
+    source_variable: V241390
+    wave: pre
+    topic: immigration
+    subtopic: childhood_arrivals
+    question_text: "What should happen to immigrants brought to the U.S. illegally as children?"
+    options:
+      sent_back: "Should be sent back"
+      allowed_to_stay: "Should be allowed to live and work in the U.S."
+      unknown: "Unknown"
+    value_mapping:
+      1: sent_back
+      2: allowed_to_stay
+      -1: unknown
+      -8: unknown
+      -9: unknown
+    canonical_target_type: categorical
+    is_vote_choice: false
+    is_candidate_eval: false
+    is_party_eval: false
+  - question_id: pre_vote_intent_2024
+    source: anes
+    source_year: 2024
+    source_variable: V241049
+    wave: pre
+    topic: vote_choice
+    subtopic: president_preference
+    question_text: "Pre-election two-way presidential preference."
+    options:
+      democrat: "Democratic candidate"
+      republican: "Republican candidate"
+      not_vote_or_unknown: "Would not vote or unknown"
+    canonical_transform: anes_vote_choice_president
+    canonical_target_type: categorical
+    is_vote_choice: true
+    is_candidate_eval: false
+    is_party_eval: false
+    is_issue_position: false
+  - question_id: vote_choice_president_2024
+    source: anes
+    source_year: 2024
+    source_variable: V242067
+    wave: post
+    topic: vote_choice
+    subtopic: president
+    question_text: "Who did the respondent vote for in the 2024 presidential election?"
+    options:
+      democrat: "Kamala Harris, the Democratic candidate"
+      republican: "Donald Trump, the Republican candidate"
+      other: "Another candidate"
+      not_vote_or_unknown: "Did not vote or unknown"
+    canonical_transform: anes_vote_choice_president
+    canonical_target_type: categorical
+    is_vote_choice: true
+    is_candidate_eval: false
+    is_party_eval: false
+    is_issue_position: false
+    excluded_memory_variables:
+      - V242067
+      - V241049
+    excluded_memory_topics:
+      - vote_choice
+      - direct_candidate_choice

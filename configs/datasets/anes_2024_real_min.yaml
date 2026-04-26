@@ -1,0 +1,19 @@
+source: anes
+year: 2024
+path: data/raw/anes/2024/anes_2024.csv
+sample_component: real_min
+usecols:
+  - V240001
+  - V241177
+  - V241221
+  - V241228
+  - V241235
+  - V241236
+  - V241237
+  - V241386
+  - V241390
+  - V241463
+  - V241499
+  - V241550
+  - V241049
+  - V242067

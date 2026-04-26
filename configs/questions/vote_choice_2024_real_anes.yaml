@@ -1,0 +1,26 @@
+questions:
+  - question_id: vote_choice_president_2024
+    source: anes
+    source_year: 2024
+    source_variable: V242067
+    topic: vote_choice
+    subtopic: president
+    question_text: >
+      In the 2024 U.S. presidential election, which option would this voter
+      most likely have chosen?
+    options:
+      democrat: "Kamala Harris, the Democratic candidate"
+      republican: "Donald Trump, the Republican candidate"
+      other: "Another candidate"
+      not_vote_or_unknown: "Would not vote or is unsure"
+    canonical_target_type: categorical
+    is_vote_choice: true
+    is_candidate_eval: false
+    is_party_eval: false
+    is_issue_position: false
+    excluded_memory_variables:
+      - V242067
+      - V241049
+    excluded_memory_topics:
+      - vote_choice
+      - direct_candidate_choice

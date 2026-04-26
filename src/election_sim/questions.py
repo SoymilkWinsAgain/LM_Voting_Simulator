@@ -63,6 +63,8 @@ def _normalize_question(raw: dict[str, Any]) -> dict[str, Any]:
     }
     for key, value in raw.items():
         if key not in normalized and key != "options":
+            if key == "value_mapping" and isinstance(value, dict):
+                value = {str(k): v for k, v in value.items()}
             normalized[key] = value
     return normalized
 

@@ -116,3 +116,58 @@ def write_eval_report(
     out = run_dir / "eval_report.md"
     out.write_text("\n".join(lines), encoding="utf-8")
     return out
+
+
+def write_individual_report(
+    *,
+    run_id: str,
+    run_dir: str | Path,
+    agents: pd.DataFrame,
+    prompts: pd.DataFrame,
+    responses: pd.DataFrame,
+    metrics: pd.DataFrame,
+) -> Path:
+    run_dir = Path(run_dir)
+    agent_cols = [
+        "agent_id",
+        "base_anes_id",
+        "gender",
+        "race_ethnicity",
+        "education_binary",
+        "party_id_3",
+        "ideology_3",
+    ]
+    response_cols = [
+        "baseline",
+        "model_name",
+        "parsed_answer_code",
+        "confidence",
+        "parse_status",
+        "target_answer_code",
+        "correct",
+    ]
+    lines = [
+        f"# Individual Smoke Report: {run_id}",
+        "",
+        "## Run metadata",
+        f"- Run ID: `{run_id}`",
+        f"- Agents: {len(agents)}",
+        f"- Prompts: {len(prompts)}",
+        f"- Responses: {len(responses)}",
+        "",
+        "## Agent",
+        _markdown_table(agents[[col for col in agent_cols if col in agents.columns]]),
+        "",
+        "## Response",
+        _markdown_table(responses[[col for col in response_cols if col in responses.columns]]),
+        "",
+        "## Metrics",
+        _markdown_table(metrics[["metric_scope", "baseline", "metric_name", "metric_value"]]),
+        "",
+        "## Prompt preview",
+        "See `prompt_preview.md` in this run directory.",
+        "",
+    ]
+    out = run_dir / "eval_report.md"
+    out.write_text("\n".join(lines), encoding="utf-8")
+    return out

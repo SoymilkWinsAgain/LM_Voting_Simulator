@@ -1,0 +1,46 @@
+source_year: 2024
+respondent_id: V240001
+fields:
+  state_po:
+    default: null
+  region:
+    default: null
+  age:
+    default: null
+  age_group:
+    default: unknown
+  gender:
+    variable: V241550
+    mapping:
+      1: male
+      2: female
+      default: other_or_unknown
+  race_ethnicity:
+    variable: V241499
+    transform: anes_2024_hispanic_to_race_ethnicity
+  education_binary:
+    variable: V241463
+    transform: anes_2024_education_to_binary
+  education_detail:
+    variable: V241463
+    transform: string
+  income_bin:
+    default: null
+  party_id_3:
+    variable: V241221
+    transform: anes_2024_party_id_to_party3
+  party_id_7:
+    variable: V241221
+    transform: string
+  ideology_3:
+    variable: V241177
+    transform: ideology7_to_ideology3
+  ideology_7:
+    variable: V241177
+    transform: string
+  political_interest:
+    default: null
+  religion:
+    default: null
+  urbanicity:
+    default: null

@@ -1,0 +1,43 @@
+run_id: real_anes_2024_one_agent_mock
+seed: 20260426
+mode: individual_benchmark
+
+scenario:
+  year: 2024
+  office: president
+  election_day: "2024-11-05"
+  states: []
+  level: individual
+
+anes_memory:
+  memory_policy: safe_survey_memory_v1
+  max_memory_facts: 6
+
+questions:
+  question_set: vote_choice_2024_real_anes
+  target_question_ids:
+    - vote_choice_president_2024
+
+baselines:
+  - survey_memory_llm
+
+model:
+  provider: mock
+  model_name: mock-voter-v1
+  temperature: 0.0
+  max_tokens: 300
+  response_format: json
+  cache_enabled: false
+
+smoke:
+  n_agents: 1
+  allow_unknown_target: false
+
+paths:
+  processed_dir: data/processed/anes/2024_real_min
+  run_dir: data/runs/real_anes_2024_one_agent_mock
+  anes_config: configs/datasets/anes_2024_real_min.yaml
+  anes_profile_crosswalk: configs/crosswalks/anes_2024_real_min_profile.yaml
+  anes_question_crosswalk: configs/crosswalks/anes_2024_real_min_questions.yaml
+  anes_fact_templates: configs/fact_templates/anes_2024_real_min_facts.yaml
+  question_set: configs/questions/vote_choice_2024_real_anes.yaml

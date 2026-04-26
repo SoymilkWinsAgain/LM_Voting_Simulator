@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from urllib import request
 
 from .config import ModelConfig
 
@@ -63,9 +64,44 @@ class OpenAICompatibleClient:
         return response.choices[0].message.content or "{}"
 
 
-def _ollama_base_url(base_url: str | None) -> str:
-    base = base_url or "http://172.26.48.1:11434"
-    return base.rstrip("/") if base.rstrip("/").endswith("/v1") else f"{base.rstrip('/')}/v1"
+@dataclass
+class OllamaClient:
+    model_name: str
+    base_url: str | None
+    temperature: float
+    max_tokens: int
+    response_format: str
+
+    def complete(self, prompt_text: str, allowed: list[str]) -> str:
+        base = (self.base_url or "http://172.26.48.1:11434").rstrip("/")
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Return only valid JSON. Do not explain. Do not include markdown.",
+                },
+                {"role": "user", "content": prompt_text},
+            ],
+            "stream": False,
+            "think": False,
+            "options": {
+                "temperature": self.temperature,
+                "num_predict": self.max_tokens,
+            },
+        }
+        if self.response_format == "json":
+            payload["format"] = "json"
+        data = json.dumps(payload).encode("utf-8")
+        req = request.Request(
+            f"{base}/api/chat",
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with request.urlopen(req, timeout=120) as resp:
+            parsed = json.loads(resp.read().decode("utf-8"))
+        return parsed.get("message", {}).get("content") or "{}"
 
 
 def build_llm_client(cfg: ModelConfig):
@@ -73,12 +109,12 @@ def build_llm_client(cfg: ModelConfig):
     if provider == "mock":
         return MockLLMClient()
     if provider == "ollama":
-        return OpenAICompatibleClient(
+        return OllamaClient(
             model_name=cfg.model_name,
-            base_url=_ollama_base_url(cfg.base_url),
-            api_key="ollama",
+            base_url=cfg.base_url,
             temperature=cfg.temperature,
             max_tokens=cfg.max_tokens,
+            response_format=cfg.response_format,
         )
     if provider in {"openai", "openai_compatible"}:
         env = cfg.api_key_env or ("OPENAI_API_KEY" if provider == "openai" else "DEEPSEEK_API_KEY")

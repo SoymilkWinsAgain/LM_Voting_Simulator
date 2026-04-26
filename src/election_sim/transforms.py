@@ -7,7 +7,23 @@ import math
 from typing import Any
 
 
-MISSING_VALUES = {"", "nan", "none", "null", "na", "n/a", "-9", "-8", "-7", "-1"}
+MISSING_VALUES = {
+    "",
+    "nan",
+    "none",
+    "null",
+    "na",
+    "n/a",
+    "-9",
+    "-8",
+    "-7",
+    "-6",
+    "-5",
+    "-4",
+    "-3",
+    "-2",
+    "-1",
+}
 
 
 def is_missing(value: Any) -> bool:
@@ -100,12 +116,54 @@ def normalize_vote(value: Any) -> str:
     return "not_vote_or_unknown"
 
 
+def anes_2024_education_to_binary(value: Any) -> str:
+    key = clean_string(value)
+    if key in {str(code) for code in range(1, 13)}:
+        return "non_college"
+    if key in {str(code) for code in range(13, 17)}:
+        return "college_plus"
+    return "unknown"
+
+
+def anes_2024_hispanic_to_race_ethnicity(value: Any) -> str:
+    key = clean_string(value)
+    if key == "1":
+        return "hispanic"
+    return "other_or_unknown"
+
+
+def anes_2024_party_id_to_party3(value: Any) -> str:
+    key = clean_string(value)
+    if key == "1":
+        return "democrat"
+    if key == "2":
+        return "republican"
+    if key in {"0", "3", "5"}:
+        return "independent_or_other"
+    return "unknown"
+
+
+def anes_vote_choice_president(value: Any) -> str:
+    key = clean_string(value)
+    if key == "1":
+        return "democrat"
+    if key == "2":
+        return "republican"
+    if key in {str(code) for code in range(3, 13)}:
+        return "other"
+    return "not_vote_or_unknown"
+
+
 TRANSFORMS = {
     "age_to_group": age_to_group,
     "education_to_binary": education_to_binary,
     "party7_to_party3": party7_to_party3,
     "ideology7_to_ideology3": ideology7_to_ideology3,
     "normalize_vote": normalize_vote,
+    "anes_2024_education_to_binary": anes_2024_education_to_binary,
+    "anes_2024_hispanic_to_race_ethnicity": anes_2024_hispanic_to_race_ethnicity,
+    "anes_2024_party_id_to_party3": anes_2024_party_id_to_party3,
+    "anes_vote_choice_president": anes_vote_choice_president,
     "int": lambda value: None if is_missing(value) else int(float(value)),
     "float": lambda value: None if is_missing(value) else float(value),
     "string": lambda value: None if is_missing(value) else clean_string(value),

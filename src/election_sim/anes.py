@@ -9,7 +9,7 @@ import pandas as pd
 
 from .io import ensure_dir, load_yaml, read_table, write_table
 from .questions import load_question_config
-from .transforms import apply_transform, clean_string, is_missing, stable_hash
+from .transforms import TRANSFORMS, apply_transform, clean_string, is_missing, stable_hash
 from .validation import require_columns, validate_categories
 
 
@@ -76,7 +76,11 @@ def build_anes(
     cfg = load_yaml(config_path)
     crosswalk = load_yaml(profile_crosswalk_path)
     questions = load_question_config(question_crosswalk_path)
-    raw = read_table(cfg["path"])
+    raw_path = Path(cfg["path"])
+    if raw_path.suffix.lower() == ".csv" and cfg.get("usecols"):
+        raw = pd.read_csv(raw_path, usecols=cfg["usecols"])
+    else:
+        raw = read_table(raw_path)
     year = int(crosswalk.get("source_year", cfg.get("year")))
     respondent_id_col = crosswalk["respondent_id"]
 
@@ -124,7 +128,13 @@ def build_anes(
             mapping = question.get("value_mapping")
             canonical = raw_value
             if isinstance(mapping, dict):
+                mapping = {str(k): v for k, v in mapping.items()}
                 canonical = mapping.get(str(raw_value), mapping.get(clean_string(raw_value), raw_value))
+            elif isinstance(question.get("canonical_transform"), str):
+                transform_name = question["canonical_transform"]
+                if transform_name not in TRANSFORMS:
+                    raise ValueError(f"Unknown canonical_transform: {transform_name}")
+                canonical = TRANSFORMS[transform_name](raw_value)
             elif question["question_id"].startswith("vote_choice"):
                 from .transforms import normalize_vote
 
@@ -253,10 +263,9 @@ def build_memory_cards(
     card_rows: list[dict[str, Any]] = []
     for _, respondent in respondents.iterrows():
         person_facts = facts[facts["anes_id"] == respondent["anes_id"]]
-        allowed = person_facts[
-            person_facts["allowed_memory_policies"].apply(lambda policies: policy in set(policies))
-        ]
-        allowed = allowed[allowed["safe_as_memory"]].head(max_facts)
+        policy_mask = person_facts["allowed_memory_policies"].apply(lambda policies: policy in set(policies))
+        allowed = person_facts.loc[policy_mask].copy()
+        allowed = allowed.loc[allowed["safe_as_memory"].astype(bool)].head(max_facts)
         by_topic = {
             topic: allowed[allowed["topic"] == topic]["fact_text"].tolist()
             for topic in sorted(set(allowed["topic"].tolist()))
@@ -301,6 +310,18 @@ def build_memory_cards(
 class LeakageGuard:
     """Filter memory facts that leak target answers or violate policy."""
 
+    @staticmethod
+    def _as_set(value: Any) -> set[Any]:
+        if value is None:
+            return set()
+        if isinstance(value, float) and pd.isna(value):
+            return set()
+        if isinstance(value, (list, tuple, set)):
+            return set(value)
+        if hasattr(value, "tolist"):
+            return set(value.tolist())
+        return {value}
+
     def filter_facts(
         self,
         facts: pd.DataFrame,
@@ -315,11 +336,11 @@ class LeakageGuard:
         out = out[out["allowed_memory_policies"].apply(lambda policies: memory_policy in set(policies))]
         out = out[
             ~out["excluded_target_question_ids"].apply(
-                lambda ids: question.get("question_id") in set(ids or [])
+                lambda ids: question.get("question_id") in self._as_set(ids)
             )
         ]
         out = out[
-            ~out["excluded_target_topics"].apply(lambda topics: question.get("topic") in set(topics or []))
+            ~out["excluded_target_topics"].apply(lambda topics: question.get("topic") in self._as_set(topics))
         ]
         excluded_vars = set(question.get("excluded_memory_variables") or [])
         if excluded_vars:

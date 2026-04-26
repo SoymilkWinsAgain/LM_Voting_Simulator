@@ -7,6 +7,15 @@ __pycache__/
 data/processed/
 data/runs/
 
+# Keep small fixture data trackable, but never commit real/raw survey datasets.
+data/raw/anes/**/*.csv
+data/raw/anes/**/*.pdf
+data/raw/anes/**/*.dta
+data/raw/anes/**/*.sav
+data/raw/anes/**/*.zip
+data/raw/anes/**/*.Zone.Identifier
+*:Zone.Identifier
+
 .env
 .env.*
 !.env.example

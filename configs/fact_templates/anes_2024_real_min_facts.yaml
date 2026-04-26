@@ -1,0 +1,105 @@
+templates:
+  - source_variable: V241228
+    topic: party_identification
+    subtopic: identity_importance
+    wave: pre
+    safe_as_memory: true
+    allowed_memory_policies: [safe_survey_memory_v1, rich_memory_v1]
+    excluded_target_question_ids: []
+    excluded_target_topics: []
+    value_templates:
+      extremely_important: "The respondent says party identity is extremely important to them."
+      very_important: "The respondent says party identity is very important to them."
+      moderately_important: "The respondent says party identity is moderately important to them."
+      a_little_important: "The respondent says party identity is a little important to them."
+      not_important: "The respondent says party identity is not at all important to them."
+    missing_policy: skip
+  - source_variable: V241235
+    topic: political_efficacy
+    subtopic: election_responsiveness
+    wave: pre
+    safe_as_memory: true
+    allowed_memory_policies: [safe_survey_memory_v1, rich_memory_v1]
+    excluded_target_question_ids: []
+    excluded_target_topics: []
+    value_templates:
+      good_deal: "The respondent feels elections make government pay attention a good deal."
+      some: "The respondent feels elections make government pay attention some."
+      not_much: "The respondent feels elections do not make government pay much attention."
+    missing_policy: skip
+  - source_variable: V241236
+    topic: economy
+    subtopic: party_performance
+    wave: pre
+    safe_as_memory: true
+    allowed_memory_policies: [safe_survey_memory_v1, rich_memory_v1]
+    excluded_target_question_ids: []
+    excluded_target_topics: []
+    value_templates:
+      democrats_much_better: "The respondent thinks Democrats would do a much better job handling the nation's economy."
+      democrats_somewhat_better: "The respondent thinks Democrats would do a somewhat better job handling the nation's economy."
+      no_difference: "The respondent sees not much difference between parties on handling the economy."
+      republicans_somewhat_better: "The respondent thinks Republicans would do a somewhat better job handling the nation's economy."
+      republicans_much_better: "The respondent thinks Republicans would do a much better job handling the nation's economy."
+    missing_policy: skip
+  - source_variable: V241237
+    topic: immigration
+    subtopic: party_performance
+    wave: pre
+    safe_as_memory: true
+    allowed_memory_policies: [safe_survey_memory_v1, rich_memory_v1]
+    excluded_target_question_ids: []
+    excluded_target_topics: []
+    value_templates:
+      democrats_much_better: "The respondent thinks Democrats would do a much better job handling immigration."
+      democrats_somewhat_better: "The respondent thinks Democrats would do a somewhat better job handling immigration."
+      no_difference: "The respondent sees not much difference between parties on handling immigration."
+      republicans_somewhat_better: "The respondent thinks Republicans would do a somewhat better job handling immigration."
+      republicans_much_better: "The respondent thinks Republicans would do a much better job handling immigration."
+    missing_policy: skip
+  - source_variable: V241386
+    topic: immigration
+    subtopic: unauthorized_immigrants
+    wave: pre
+    safe_as_memory: true
+    allowed_memory_policies: [safe_survey_memory_v1, rich_memory_v1]
+    excluded_target_question_ids: []
+    excluded_target_topics: []
+    value_templates:
+      deport_felons: "The respondent supports making unauthorized immigrants felons and sending them back."
+      guest_worker: "The respondent supports a limited guest worker program for unauthorized immigrants."
+      citizenship_requirements: "The respondent supports citizenship for unauthorized immigrants if they meet requirements."
+      citizenship_no_penalties: "The respondent supports citizenship for unauthorized immigrants without penalties."
+    missing_policy: skip
+  - source_variable: V241390
+    topic: immigration
+    subtopic: childhood_arrivals
+    wave: pre
+    safe_as_memory: true
+    allowed_memory_policies: [safe_survey_memory_v1, rich_memory_v1]
+    excluded_target_question_ids: []
+    excluded_target_topics: []
+    value_templates:
+      sent_back: "The respondent says immigrants brought illegally as children should be sent back."
+      allowed_to_stay: "The respondent says immigrants brought illegally as children should be allowed to live and work in the U.S."
+    missing_policy: skip
+  - source_variable: V241049
+    topic: vote_choice
+    subtopic: president_preference
+    wave: pre
+    safe_as_memory: false
+    allowed_memory_policies: []
+    excluded_target_question_ids: [vote_choice_president_2024]
+    excluded_target_topics: [vote_choice]
+    value_templates: {}
+    missing_policy: skip
+  - source_variable: V242067
+    topic: vote_choice
+    subtopic: president
+    wave: post
+    safe_as_memory: false
+    allowed_memory_policies: []
+    excluded_target_question_ids: [vote_choice_president_2024]
+    excluded_target_topics: [vote_choice]
+    value_templates: {}
+    missing_policy: skip

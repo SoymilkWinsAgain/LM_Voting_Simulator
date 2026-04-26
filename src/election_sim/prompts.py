@@ -133,10 +133,11 @@ def build_prompt(
             max_facts=max_memory_facts,
         )
     template = Template(TEMPLATES[mode])
+    state_po = agent["state_po"] if pd.notna(agent.get("state_po")) and agent.get("state_po") else "unknown"
     text = template.render(
         year=agent["year"],
-        state_po=agent["state_po"],
-        age_group=agent["age_group"],
+        state_po=state_po,
+        age_group=agent["age_group"] or "unknown",
         gender=agent["gender"],
         race_ethnicity=agent["race_ethnicity"],
         education_binary=agent["education_binary"],
