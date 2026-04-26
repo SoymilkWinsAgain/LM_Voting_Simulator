@@ -1,0 +1,4 @@
+source: fixture
+year: 2024
+path: data/raw/fixture/anes/anes_2024_fixture.csv
+sample_component: fixture

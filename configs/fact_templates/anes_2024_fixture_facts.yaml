@@ -1,0 +1,76 @@
+templates:
+  - source_variable: political_interest
+    topic: political_engagement
+    subtopic: interest
+    wave: pre
+    safe_as_memory: true
+    allowed_memory_policies: [safe_survey_memory_v1, rich_memory_v1]
+    excluded_target_question_ids: []
+    excluded_target_topics: []
+    value_templates:
+      high: "The respondent follows politics most of the time."
+      medium: "The respondent follows politics some of the time."
+      low: "The respondent hardly follows politics."
+    missing_policy: skip
+  - source_variable: media_use
+    topic: media_use
+    subtopic: campaign_information
+    wave: pre
+    safe_as_memory: true
+    allowed_memory_policies: [safe_survey_memory_v1, rich_memory_v1]
+    excluded_target_question_ids: []
+    excluded_target_topics: []
+    value_templates:
+      tv: "The respondent uses television for campaign information."
+      internet: "The respondent uses internet sources for campaign information."
+      mixed: "The respondent uses a mix of television and internet sources for campaign information."
+    missing_policy: skip
+  - source_variable: economy_view
+    topic: economy
+    subtopic: national_economy
+    wave: pre
+    safe_as_memory: true
+    allowed_memory_policies: [safe_survey_memory_v1, rich_memory_v1]
+    excluded_target_question_ids: []
+    excluded_target_topics: []
+    value_templates:
+      better: "The respondent thinks the national economy is getting better."
+      same: "The respondent thinks the national economy is about the same."
+      worse: "The respondent thinks the national economy is getting worse."
+    missing_policy: skip
+  - source_variable: abortion_view
+    topic: abortion
+    subtopic: policy_position
+    wave: pre
+    safe_as_memory: true
+    allowed_memory_policies: [safe_survey_memory_v1, rich_memory_v1]
+    excluded_target_question_ids: []
+    excluded_target_topics: []
+    value_templates:
+      legal: "The respondent generally supports legal access to abortion."
+      restricted: "The respondent generally supports restrictions on abortion."
+      mixed: "The respondent has a mixed or conditional view on abortion policy."
+    missing_policy: skip
+  - source_variable: party_therm
+    topic: party_affect
+    subtopic: relative_warmth
+    wave: pre
+    safe_as_memory: true
+    allowed_memory_policies: [safe_survey_memory_v1, rich_memory_v1]
+    excluded_target_question_ids: []
+    excluded_target_topics: []
+    value_templates:
+      dem_warmer: "The respondent feels warmer toward Democrats than Republicans."
+      rep_warmer: "The respondent feels warmer toward Republicans than Democrats."
+      even: "The respondent feels about equally toward both major parties."
+    missing_policy: skip
+  - source_variable: post_vote_choice
+    topic: vote_choice
+    subtopic: president
+    wave: post
+    safe_as_memory: false
+    allowed_memory_policies: []
+    excluded_target_question_ids: [vote_choice_president_2024]
+    excluded_target_topics: [vote_choice]
+    value_templates: {}
+    missing_policy: skip

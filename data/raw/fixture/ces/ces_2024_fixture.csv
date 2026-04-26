@@ -1,0 +1,13 @@
+ces_id,state_po,state_fips,age,gender,race_ethnicity,education,income_bin,party_id,ideology,vote_choice_president,common_weight
+CESF001,PA,42,24,female,black,college_plus,40_80k,democrat,liberal,democrat,1.2
+CESF002,PA,42,37,male,white,non_college,40_80k,republican,conservative,republican,1.1
+CESF003,PA,42,52,female,white,non_college,under_40k,republican,conservative,republican,1.4
+CESF004,PA,42,69,male,white,college_plus,80_150k,democrat,moderate,democrat,0.9
+CESF005,PA,42,31,female,hispanic,non_college,under_40k,independent,moderate,other,0.7
+CESF006,PA,42,44,male,asian,college_plus,80_150k,democrat,liberal,democrat,0.8
+CESF007,PA,42,58,female,white,non_college,40_80k,independent,moderate,republican,0.9
+CESF008,PA,42,72,male,black,non_college,under_40k,democrat,liberal,democrat,1.0
+CESF009,PA,42,28,male,white,college_plus,40_80k,independent,moderate,democrat,0.6
+CESF010,PA,42,63,female,white,college_plus,80_150k,republican,conservative,republican,0.8
+CESF011,PA,42,48,male,hispanic,non_college,40_80k,democrat,moderate,democrat,0.7
+CESF012,PA,42,34,female,white,college_plus,80_150k,republican,conservative,republican,0.9

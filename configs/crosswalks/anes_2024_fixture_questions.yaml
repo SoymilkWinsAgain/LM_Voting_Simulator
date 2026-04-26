@@ -1,0 +1,130 @@
+questions:
+  - question_id: political_interest_2024
+    source: anes
+    source_year: 2024
+    source_variable: political_interest
+    wave: pre
+    topic: political_engagement
+    subtopic: interest
+    question_text: "How closely does the respondent follow politics?"
+    options:
+      high: "Most of the time"
+      medium: "Some of the time"
+      low: "Hardly at all"
+    value_mapping:
+      high: high
+      medium: medium
+      low: low
+    canonical_target_type: categorical
+    is_vote_choice: false
+    is_candidate_eval: false
+    is_party_eval: false
+    is_issue_position: false
+  - question_id: media_use_2024
+    source: anes
+    source_year: 2024
+    source_variable: media_use
+    wave: pre
+    topic: media_use
+    subtopic: campaign_information
+    question_text: "Primary campaign information source."
+    options:
+      tv: "Television"
+      internet: "Internet"
+      mixed: "Mixed sources"
+    value_mapping:
+      tv: tv
+      internet: internet
+      mixed: mixed
+    canonical_target_type: categorical
+    is_vote_choice: false
+    is_candidate_eval: false
+    is_party_eval: false
+    is_issue_position: false
+  - question_id: economy_view_2024
+    source: anes
+    source_year: 2024
+    source_variable: economy_view
+    wave: pre
+    topic: economy
+    subtopic: national_economy
+    question_text: "View of the national economy."
+    options:
+      better: "Getting better"
+      same: "About the same"
+      worse: "Getting worse"
+    value_mapping:
+      better: better
+      same: same
+      worse: worse
+    canonical_target_type: categorical
+    is_vote_choice: false
+    is_candidate_eval: false
+    is_party_eval: false
+    is_issue_position: true
+  - question_id: abortion_view_2024
+    source: anes
+    source_year: 2024
+    source_variable: abortion_view
+    wave: pre
+    topic: abortion
+    subtopic: policy_position
+    question_text: "View on abortion policy."
+    options:
+      legal: "Should generally be legal"
+      restricted: "Should generally be restricted"
+      mixed: "Depends or mixed"
+    value_mapping:
+      legal: legal
+      restricted: restricted
+      mixed: mixed
+    canonical_target_type: categorical
+    is_vote_choice: false
+    is_candidate_eval: false
+    is_party_eval: false
+    is_issue_position: true
+  - question_id: party_thermometer_2024
+    source: anes
+    source_year: 2024
+    source_variable: party_therm
+    wave: pre
+    topic: party_affect
+    subtopic: relative_warmth
+    question_text: "Relative party warmth."
+    options:
+      dem_warmer: "Warmer toward Democrats"
+      rep_warmer: "Warmer toward Republicans"
+      even: "About even"
+    value_mapping:
+      dem_warmer: dem_warmer
+      rep_warmer: rep_warmer
+      even: even
+    canonical_target_type: categorical
+    is_vote_choice: false
+    is_candidate_eval: false
+    is_party_eval: true
+    is_issue_position: false
+  - question_id: vote_choice_president_2024
+    source: anes
+    source_year: 2024
+    source_variable: post_vote_choice
+    wave: post
+    topic: vote_choice
+    subtopic: president
+    question_text: "Post-election presidential vote choice."
+    options:
+      democrat: "Democratic candidate"
+      republican: "Republican candidate"
+      other: "Other candidate"
+      not_vote_or_unknown: "Did not vote or unknown"
+    canonical_target_type: categorical
+    is_vote_choice: true
+    is_candidate_eval: false
+    is_party_eval: false
+    is_issue_position: false
+    excluded_memory_variables:
+      - post_vote_choice
+      - pre_vote_intent
+    excluded_memory_topics:
+      - vote_choice
+      - direct_candidate_choice

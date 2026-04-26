@@ -1,0 +1,7 @@
+source: fixture
+year: 2024
+path: data/raw/fixture/ces/ces_2024_fixture.csv
+smoothing:
+  enabled: true
+  tau: 5
+  national_prior_weight: 0.15

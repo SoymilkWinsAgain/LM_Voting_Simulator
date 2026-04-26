@@ -1,0 +1,63 @@
+source_year: 2024
+respondent_id: anes_id
+weights:
+  pre: weight
+  post: weight
+  full: weight
+fields:
+  state_po:
+    variable: state_po
+    transform: string
+  region:
+    variable: region
+    transform: string
+  age:
+    variable: age
+    transform: int
+  age_group:
+    variable: age
+    transform: age_to_group
+  gender:
+    variable: gender
+    mapping:
+      male: male
+      female: female
+      default: other_or_unknown
+  race_ethnicity:
+    variable: race_ethnicity
+    mapping:
+      white: white
+      black: black
+      hispanic: hispanic
+      asian: asian
+      default: other_or_unknown
+  education_binary:
+    variable: education
+    transform: education_to_binary
+  education_detail:
+    variable: education
+    transform: string
+  income_bin:
+    variable: income_bin
+    transform: string
+  party_id_3:
+    variable: party_id
+    transform: party7_to_party3
+  party_id_7:
+    variable: party_id
+    transform: string
+  ideology_3:
+    variable: ideology
+    transform: ideology7_to_ideology3
+  ideology_7:
+    variable: ideology
+    transform: string
+  political_interest:
+    variable: political_interest
+    transform: string
+  religion:
+    variable: religion
+    transform: string
+  urbanicity:
+    variable: urbanicity
+    transform: string

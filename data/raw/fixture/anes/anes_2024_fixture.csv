@@ -1,0 +1,9 @@
+anes_id,state_po,region,age,gender,race_ethnicity,education,income_bin,party_id,ideology,political_interest,media_use,economy_view,abortion_view,party_therm,pre_vote_intent,post_vote_choice,religion,urbanicity,weight
+ANESF001,PA,Northeast,24,female,black,college_plus,40_80k,democrat,liberal,high,internet,worse,legal,dem_warmer,democrat,democrat,none,urban,1.1
+ANESF002,PA,Northeast,37,male,white,non_college,40_80k,republican,conservative,medium,tv,worse,restricted,rep_warmer,republican,republican,protestant,suburban,0.9
+ANESF003,PA,Northeast,52,female,white,non_college,under_40k,republican,conservative,high,mixed,worse,restricted,rep_warmer,republican,republican,catholic,rural,1.2
+ANESF004,PA,Northeast,69,male,white,college_plus,80_150k,democrat,moderate,medium,tv,same,mixed,dem_warmer,democrat,democrat,catholic,suburban,1.0
+ANESF005,PA,Northeast,31,female,hispanic,non_college,under_40k,independent,moderate,low,internet,same,legal,even,other,other,catholic,urban,0.8
+ANESF006,PA,Northeast,44,male,asian,college_plus,80_150k,democrat,liberal,high,internet,better,legal,dem_warmer,democrat,democrat,none,urban,1.0
+ANESF007,PA,Northeast,58,female,white,non_college,40_80k,independent,moderate,medium,mixed,worse,mixed,even,republican,republican,protestant,suburban,1.0
+ANESF008,PA,Northeast,72,male,black,non_college,under_40k,democrat,liberal,medium,tv,same,legal,dem_warmer,democrat,democrat,protestant,urban,1.1

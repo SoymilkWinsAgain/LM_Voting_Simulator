@@ -1,0 +1,20 @@
+cards:
+  - context_card_id: gdelt_stub_2024_PA_economy_2024-10-01_2024-10-15
+    year: 2024
+    state_po: PA
+    geo_scope: state
+    start_date: "2024-10-01"
+    end_date: "2024-10-15"
+    topic: economy
+    candidate_ids: [dem_2024_president, rep_2024_president]
+    event_count: 128
+    mention_count: 940
+    avg_tone: -1.8
+    top_themes: [ECONOMY, INFLATION, COST_OF_LIVING, CAMPAIGN]
+    top_persons: [Kamala Harris, Donald Trump]
+    top_organizations: []
+    top_locations: [Pennsylvania]
+    summary: >
+      Recent coverage emphasized inflation, grocery prices, jobs, and campaign
+      messages about the economy in Pennsylvania.
+    source: manual_stub

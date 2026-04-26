@@ -1,0 +1,15 @@
+year: 2024
+office: president
+candidates:
+  - candidate_id: dem_2024_president
+    name: Kamala Harris
+    party: democrat
+    short_label: Harris
+  - candidate_id: rep_2024_president
+    name: Donald Trump
+    party: republican
+    short_label: Trump
+  - candidate_id: other_2024_president
+    name: Other candidate
+    party: other
+    short_label: Other

@@ -1,0 +1,61 @@
+run_id: first_e2e_2024_pa_fixture
+seed: 20260426
+mode: election_simulation
+
+scenario:
+  year: 2024
+  office: president
+  election_day: "2024-11-05"
+  states: ["PA"]
+  level: state
+
+population:
+  source: fixture
+  n_agents_per_state: 50
+  cell_schema: mvp_state_cell_v1
+  allocation: deterministic
+  archetype_matching:
+    min_candidates_per_cell: 1
+
+anes_memory:
+  memory_policy: safe_survey_memory_v1
+  max_memory_facts: 12
+
+questions:
+  question_set: vote_choice_2024
+
+gdelt:
+  enabled: false
+
+baselines:
+  - majority
+  - ces_empirical_cell
+  - demographic_only_llm
+  - party_ideology_llm
+  - survey_memory_llm
+
+model:
+  provider: mock
+  model_name: mock-voter-v1
+  temperature: 0.0
+  max_tokens: 300
+  response_format: json
+  cache_enabled: true
+
+evaluation:
+  mit_results_year: 2024
+  metrics:
+    election: [winner_accuracy, vote_share_rmse, margin_mae]
+
+paths:
+  processed_dir: data/processed/fixture/2024
+  run_dir: data/runs/first_e2e_2024_pa_fixture
+  anes_config: configs/datasets/anes_2024_fixture.yaml
+  anes_profile_crosswalk: configs/crosswalks/anes_2024_fixture_profile.yaml
+  anes_question_crosswalk: configs/crosswalks/anes_2024_fixture_questions.yaml
+  anes_fact_templates: configs/fact_templates/anes_2024_fixture_facts.yaml
+  ces_config: configs/datasets/ces_2024_fixture.yaml
+  ces_crosswalk: configs/crosswalks/ces_2024_fixture_profile.yaml
+  mit_config: configs/datasets/mit_president_county_fixture.yaml
+  cell_schema: configs/cell_schemas/mvp_state_cell_v1.yaml
+  question_set: configs/questions/vote_choice_2024.yaml

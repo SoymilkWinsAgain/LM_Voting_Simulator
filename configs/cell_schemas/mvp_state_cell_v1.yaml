@@ -1,0 +1,26 @@
+name: mvp_state_cell_v1
+columns:
+  - state_po
+  - age_group
+  - gender
+  - race_ethnicity
+  - education_binary
+  - party_id_3
+  - ideology_3
+
+weights:
+  state_po: 1.5
+  age_group: 1.0
+  gender: 0.5
+  race_ethnicity: 2.0
+  education_binary: 1.5
+  party_id_3: 3.0
+  ideology_3: 2.5
+
+backoff_levels:
+  - [state_po, age_group, gender, race_ethnicity, education_binary, party_id_3, ideology_3]
+  - [state_po, age_group, race_ethnicity, education_binary, party_id_3, ideology_3]
+  - [state_po, race_ethnicity, education_binary, party_id_3, ideology_3]
+  - [race_ethnicity, education_binary, party_id_3, ideology_3]
+  - [party_id_3, ideology_3]
+  - [party_id_3]

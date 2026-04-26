@@ -1,0 +1,14 @@
+source: fixture
+year: 2024
+path: data/raw/fixture/mit/president_county_2024_fixture.csv
+office: president
+level: county
+columns:
+  state_po: state_po
+  state_fips: state_fips
+  county_name: county_name
+  county_fips: county_fips
+  candidate: candidate
+  party_detailed: party_detailed
+  candidatevotes: candidatevotes
+  totalvotes: totalvotes

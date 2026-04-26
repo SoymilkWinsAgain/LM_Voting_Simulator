@@ -1,0 +1,42 @@
+source_year: 2024
+respondent_id: ces_id
+weight: common_weight
+fields:
+  state_po:
+    variable: state_po
+    transform: string
+  state_fips:
+    variable: state_fips
+    transform: string
+  age_group:
+    variable: age
+    transform: age_to_group
+  gender:
+    variable: gender
+    mapping:
+      male: male
+      female: female
+      default: other_or_unknown
+  race_ethnicity:
+    variable: race_ethnicity
+    mapping:
+      white: white
+      black: black
+      hispanic: hispanic
+      asian: asian
+      default: other_or_unknown
+  education_binary:
+    variable: education
+    transform: education_to_binary
+  income_bin:
+    variable: income_bin
+    transform: string
+  party_id_3:
+    variable: party_id
+    transform: party7_to_party3
+  ideology_3:
+    variable: ideology
+    transform: ideology7_to_ideology3
+  vote_choice_president:
+    variable: vote_choice_president
+    transform: normalize_vote

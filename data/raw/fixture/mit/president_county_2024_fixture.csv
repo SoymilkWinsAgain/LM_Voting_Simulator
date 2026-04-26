@@ -1,0 +1,7 @@
+year,state_po,state_fips,county_name,county_fips,candidate,party_detailed,candidatevotes,totalvotes
+2024,PA,42,Allegheny,42003,Kamala Harris,DEMOCRAT,430000,760000
+2024,PA,42,Allegheny,42003,Donald Trump,REPUBLICAN,310000,760000
+2024,PA,42,Allegheny,42003,Other candidate,OTHER,20000,760000
+2024,PA,42,Luzerne,42079,Kamala Harris,DEMOCRAT,80000,190000
+2024,PA,42,Luzerne,42079,Donald Trump,REPUBLICAN,105000,190000
+2024,PA,42,Luzerne,42079,Other candidate,OTHER,5000,190000
