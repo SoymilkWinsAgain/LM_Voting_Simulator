@@ -205,7 +205,7 @@ Run these in order after changing ingest, memory, simulation, evaluation, or
 report code:
 
 ```bash
-conda run -n jigsaw python -m election_sim.cli build-ces \
+conda run -n voting_simulator python -m election_sim.cli build-ces \
   --config configs/datasets/ces_2024_real_vv.yaml \
   --profile-crosswalk configs/crosswalks/ces_2024_profile.yaml \
   --question-crosswalk configs/crosswalks/ces_2024_pre_questions.yaml \
@@ -213,7 +213,7 @@ conda run -n jigsaw python -m election_sim.cli build-ces \
   --context-crosswalk configs/crosswalks/ces_2024_context.yaml \
   --out data/processed/ces/2024_common_vv
 
-conda run -n jigsaw python -m election_sim.cli build-ces-memory \
+conda run -n voting_simulator python -m election_sim.cli build-ces-memory \
   --respondents data/processed/ces/2024_common_vv/ces_respondents.parquet \
   --answers data/processed/ces/2024_common_vv/ces_answers.parquet \
   --fact-templates configs/fact_templates/ces_2024_common_facts.yaml \
@@ -221,7 +221,7 @@ conda run -n jigsaw python -m election_sim.cli build-ces-memory \
   --out data/processed/ces/2024_common_vv \
   --max-facts 24
 
-conda run -n jigsaw python -m election_sim.cli build-ces-memory \
+conda run -n voting_simulator python -m election_sim.cli build-ces-memory \
   --respondents data/processed/ces/2024_common_vv/ces_respondents.parquet \
   --answers data/processed/ces/2024_common_vv/ces_answers.parquet \
   --fact-templates configs/fact_templates/ces_2024_common_facts.yaml \
@@ -229,16 +229,16 @@ conda run -n jigsaw python -m election_sim.cli build-ces-memory \
   --out data/processed/ces/2024_common_vv_poll \
   --max-facts 24
 
-conda run -n jigsaw python -m election_sim.cli build-mit-president \
+conda run -n voting_simulator python -m election_sim.cli build-mit-president \
   --config configs/datasets/mit_president_returns.yaml
 
-conda run -n jigsaw python -m election_sim.cli run-simulation \
+conda run -n voting_simulator python -m election_sim.cli run-simulation \
   --run-config configs/runs/ces_2024_president_swing_strict_pre.yaml
 
-conda run -n jigsaw python -m election_sim.cli run-simulation \
+conda run -n voting_simulator python -m election_sim.cli run-simulation \
   --run-config configs/runs/ces_2024_president_swing_poll_informed.yaml
 
-conda run -n jigsaw python -m pytest
+conda run -n voting_simulator python -m pytest
 ```
 
 The default swing configs are the formal row-level configs: they use
@@ -251,7 +251,7 @@ validation.
 Optional real-model smoke:
 
 ```bash
-conda run -n jigsaw python -m election_sim.cli run-simulation \
+conda run -n voting_simulator python -m election_sim.cli run-simulation \
   --run-config configs/runs/ces_2024_president_qwen08b_3_agent.yaml
 ```
 

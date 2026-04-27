@@ -23,18 +23,29 @@ Real raw data and generated outputs are local only and are ignored by Git.
 
 ## Setup
 
-Use the shared `jigsaw` environment for all Python commands:
+Create a dedicated Python environment for this project:
 
 ```bash
-conda run -n jigsaw python --version
-conda run -n jigsaw python -m pytest
+mamba create -y -n voting_simulator python=3.11 pip
+conda run -n voting_simulator python -m pip install -r requirements.txt
+conda run -n voting_simulator python -m pip install -e .
+conda run -n voting_simulator python --version
+conda run -n voting_simulator python -m pytest
 ```
 
-The package uses a `src/` layout plus a repository-local import shim, so CLI
-commands work from a fresh checkout without an editable install:
+If `mamba` is unavailable, use `conda create -y -n voting_simulator python=3.11 pip`
+for the first line.
+
+The current project does not require CUDA-specific Python packages. Local GPU
+use, if any, happens through Ollama or another external model server; the Python
+pipeline itself uses pandas, pyarrow, scikit-learn, and API clients.
+
+The package uses a `src/` layout plus a repository-local import shim. Editable
+install is still recommended so package metadata and reference JSON files are
+visible consistently:
 
 ```bash
-conda run -n jigsaw python -m election_sim.cli --help
+conda run -n voting_simulator python -m election_sim.cli --help
 ```
 
 ## Raw Data
@@ -62,7 +73,7 @@ reference inputs for humans, not parsed during normal runs.
 Build CES respondent artifacts:
 
 ```bash
-conda run -n jigsaw python -m election_sim.cli build-ces \
+conda run -n voting_simulator python -m election_sim.cli build-ces \
   --config configs/datasets/ces_2024_real_vv.yaml \
   --profile-crosswalk configs/crosswalks/ces_2024_profile.yaml \
   --question-crosswalk configs/crosswalks/ces_2024_pre_questions.yaml \
@@ -74,7 +85,7 @@ conda run -n jigsaw python -m election_sim.cli build-ces \
 Build strict pre-election memory:
 
 ```bash
-conda run -n jigsaw python -m election_sim.cli build-ces-memory \
+conda run -n voting_simulator python -m election_sim.cli build-ces-memory \
   --respondents data/processed/ces/2024_common_vv/ces_respondents.parquet \
   --answers data/processed/ces/2024_common_vv/ces_answers.parquet \
   --fact-templates configs/fact_templates/ces_2024_common_facts.yaml \
@@ -86,14 +97,14 @@ conda run -n jigsaw python -m election_sim.cli build-ces-memory \
 Build MIT official truth:
 
 ```bash
-conda run -n jigsaw python -m election_sim.cli build-mit-president \
+conda run -n voting_simulator python -m election_sim.cli build-mit-president \
   --config configs/datasets/mit_president_returns.yaml
 ```
 
 Run the seven-state strict pre-election experiment:
 
 ```bash
-conda run -n jigsaw python -m election_sim.cli run-simulation \
+conda run -n voting_simulator python -m election_sim.cli run-simulation \
   --run-config configs/runs/ces_2024_president_swing_strict_pre.yaml
 ```
 
@@ -102,14 +113,14 @@ states and evaluate against real processed MIT state truth. For fast validation
 without running the full row set, use the `_smoke` variants:
 
 ```bash
-conda run -n jigsaw python -m election_sim.cli run-simulation \
+conda run -n voting_simulator python -m election_sim.cli run-simulation \
   --run-config configs/runs/ces_2024_president_swing_strict_pre_smoke.yaml
 ```
 
 For poll-informed prompts, build a separate memory directory and run:
 
 ```bash
-conda run -n jigsaw python -m election_sim.cli build-ces-memory \
+conda run -n voting_simulator python -m election_sim.cli build-ces-memory \
   --respondents data/processed/ces/2024_common_vv/ces_respondents.parquet \
   --answers data/processed/ces/2024_common_vv/ces_answers.parquet \
   --fact-templates configs/fact_templates/ces_2024_common_facts.yaml \
@@ -117,7 +128,7 @@ conda run -n jigsaw python -m election_sim.cli build-ces-memory \
   --out data/processed/ces/2024_common_vv_poll \
   --max-facts 24
 
-conda run -n jigsaw python -m election_sim.cli run-simulation \
+conda run -n voting_simulator python -m election_sim.cli run-simulation \
   --run-config configs/runs/ces_2024_president_swing_poll_informed.yaml
 ```
 
@@ -140,34 +151,34 @@ data/runs/<run_id>/
 Fixture end-to-end run:
 
 ```bash
-conda run -n jigsaw python -m election_sim.cli run-simulation \
+conda run -n voting_simulator python -m election_sim.cli run-simulation \
   --run-config configs/runs/first_e2e_2024_pa_fixture.yaml
 ```
 
 Deterministic CES smoke:
 
 ```bash
-conda run -n jigsaw python -m election_sim.cli run-simulation \
+conda run -n voting_simulator python -m election_sim.cli run-simulation \
   --run-config configs/runs/ces_2024_president_smoke.yaml
 ```
 
 Tiny real-model CES smoke using local Ollama `qwen3.5:0.8b`:
 
 ```bash
-conda run -n jigsaw python -m election_sim.cli run-simulation \
+conda run -n voting_simulator python -m election_sim.cli run-simulation \
   --run-config configs/runs/ces_2024_president_qwen08b_3_agent.yaml
 ```
 
 Real ANES 2024 one-agent smoke:
 
 ```bash
-conda run -n jigsaw python -m election_sim.cli build-anes \
+conda run -n voting_simulator python -m election_sim.cli build-anes \
   --config configs/datasets/anes_2024_real_min.yaml \
   --profile-crosswalk configs/crosswalks/anes_2024_real_min_profile.yaml \
   --question-crosswalk configs/crosswalks/anes_2024_real_min_questions.yaml \
   --out data/processed/anes/2024_real_min
 
-conda run -n jigsaw python -m election_sim.cli build-anes-memory \
+conda run -n voting_simulator python -m election_sim.cli build-anes-memory \
   --respondents data/processed/anes/2024_real_min/anes_respondents.parquet \
   --answers data/processed/anes/2024_real_min/anes_answers.parquet \
   --fact-templates configs/fact_templates/anes_2024_real_min_facts.yaml \
@@ -175,7 +186,7 @@ conda run -n jigsaw python -m election_sim.cli build-anes-memory \
   --out data/processed/anes/2024_real_min \
   --max-facts 6
 
-conda run -n jigsaw python -m election_sim.cli run-simulation \
+conda run -n voting_simulator python -m election_sim.cli run-simulation \
   --run-config configs/runs/real_anes_2024_one_agent_ollama.yaml
 ```
 

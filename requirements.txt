@@ -1,0 +1,20 @@
+# Core runtime
+jinja2>=3.1,<4
+numpy>=2.0,<3
+openai>=2.0,<3
+pandas>=2.2,<4
+pydantic>=2.6,<3
+pyarrow>=15,<23
+PyYAML>=6,<7
+scikit-learn>=1.4,<2
+typer>=0.12,<1
+
+# Benchmark/report plotting utilities
+matplotlib>=3.8,<4
+seaborn>=0.13,<1
+
+# Local raw-data helper utilities
+PyMuPDF>=1.23,<2
+
+# Test runner
+pytest>=8,<9
