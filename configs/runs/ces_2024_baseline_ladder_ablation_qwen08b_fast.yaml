@@ -1,0 +1,46 @@
+run_id: ces_2024_baseline_ladder_ablation_qwen08b_fast_v1
+seed: 20260426
+mode: ces_ablation_benchmark
+
+states: ["PA", "GA", "AZ", "WI"]
+main_agents_per_state: 50
+diagnostic_boost_per_state: 10
+
+baselines:
+  - L1_demographic_only_llm
+  - L2_demographic_state_llm
+  - L3_party_ideology_llm
+  - L4_party_ideology_context_llm
+  - L5_strict_memory_llm
+  - L6_strict_memory_context_llm
+  - L7_poll_informed_memory_context_llm
+  - L8_post_hoc_oracle_memory_context_llm
+  - P1_memory_shuffled_within_state_llm
+  - P2_memory_shuffled_within_party_llm
+
+memory:
+  max_memory_facts: 24
+
+llm:
+  timing_responses: 40
+  max_runtime_minutes: 45.0
+  workers: 8
+
+model:
+  provider: ollama
+  base_url: http://172.26.48.1:11434
+  model_name: qwen3.5:0.8b
+  temperature: 0.0
+  max_tokens: 400
+  response_format: json
+  cache_enabled: true
+
+paths:
+  run_dir: data/runs/ces_2024_baseline_ladder_ablation_qwen08b_fast_v1
+  ces_respondents: data/processed/ces/2024_common_vv/ces_respondents.parquet
+  ces_targets: data/processed/ces/2024_common_vv/ces_targets.parquet
+  ces_context: data/processed/ces/2024_common_vv/ces_context.parquet
+  ces_memory_facts_strict: data/processed/ces/2024_common_vv/ces_memory_facts.parquet
+  ces_memory_facts_poll: data/processed/ces/2024_common_vv_poll/ces_memory_facts.parquet
+  question_set: configs/questions/ces_2024_president_turnout_vote.yaml
+  mit_state_truth: data/processed/mit/president_state_truth.parquet

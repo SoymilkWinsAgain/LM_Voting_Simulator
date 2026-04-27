@@ -9,6 +9,7 @@ description = "Synthetic election simulation MVP"
 requires-python = ">=3.11"
 dependencies = [
   "jinja2",
+  "matplotlib",
   "numpy",
   "openai",
   "pandas",
@@ -16,6 +17,7 @@ dependencies = [
   "pyarrow",
   "pyyaml",
   "scikit-learn",
+  "seaborn",
   "typer",
 ]
 

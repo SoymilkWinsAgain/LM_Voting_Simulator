@@ -8,6 +8,43 @@ import pandas as pd
 from election_sim.aggregation import aggregate_state_results, aggregate_turnout_vote_state_results
 from election_sim.anes import LeakageGuard, build_anes, build_memory_cards
 from election_sim.ces_baselines import build_ces_non_llm_baselines
+from election_sim.ces_aggregate_benchmark import (
+    AggregateLlmCache,
+    _state_predictions_from_responses,
+    build_nested_state_sample,
+    build_sample_membership,
+    complete_llm_task_with_cache,
+    mit_2020_state_prior_predictions,
+    run_ces_aggregate_benchmark,
+    swing_aggregate_metric_rows,
+    uniform_national_swing_from_2020_predictions,
+)
+from election_sim.ces_ablation_benchmark import (
+    build_memory_donor_map,
+    choose_effective_agents_per_state,
+    render_ablation_prompt,
+    run_ces_ablation_benchmark,
+)
+from election_sim.ces_leakage_benchmark import (
+    choose_effective_agents_per_state as choose_leakage_effective_agents_per_state,
+    leakage_contrast_rows,
+    normalize_leakage_response,
+    render_leakage_prompt,
+    run_ces_leakage_benchmark,
+    state_swap_diagnostics,
+)
+from election_sim.ces_benchmark import (
+    _baseline_factory,
+    _post_hoc_oracle_raw,
+    _target_wide,
+    benchmark_feature_frame,
+    benchmark_metric_rows,
+    build_benchmark_cohort,
+    crossfit_partitions,
+    expected_calibration_error,
+    multiclass_brier,
+    run_ces_individual_benchmark,
+)
 from election_sim.ces_schema import format_turnout_vote_response
 from election_sim.ces import build_ces, build_ces_cells, build_ces_memory_cards
 from election_sim.config import RunConfig, load_cell_schema, load_run_config
@@ -463,6 +500,886 @@ def test_ces_non_llm_baselines_emit_canonical_schema(tmp_path):
     for baseline in baselines.values():
         parsed = parse_turnout_vote_json(baseline.predict(agents.iloc[0]).raw_response)
         assert parsed["parse_status"] == "ok"
+
+
+def test_ces_benchmark_split_and_crossfit_contracts():
+    cohort = pd.DataFrame({"ces_id": [str(i) for i in range(200)]})
+    splits = build_benchmark_cohort(
+        pd.DataFrame(
+            {
+                "ces_id": [str(i) for i in range(200)],
+                "tookpost": [True] * 200,
+                "citizenship": ["yes"] * 200,
+                "state_po": ["PA"] * 200,
+                "party_id_3_pre": ["democrat"] * 200,
+                "weight_common_post": [1.0] * 200,
+            }
+        ),
+        seed=20260426,
+    )
+    assert set(splits["split"]) <= {"train", "dev", "test"}
+    assert set(splits["fold"]) <= {0, 1, 2, 3, 4}
+    for fold in range(5):
+        train_ids, dev_ids, eval_ids = crossfit_partitions(splits, fold)
+        assert train_ids.isdisjoint(dev_ids)
+        assert train_ids.isdisjoint(eval_ids)
+        assert dev_ids.isdisjoint(eval_ids)
+        assert train_ids | dev_ids | eval_ids == set(splits["ces_id"])
+    assert set(cohort.columns) == {"ces_id"}
+
+
+def test_ces_benchmark_feature_policies_exclude_and_include_expected_variables(tmp_path):
+    config_path = _write_tiny_ces_fixture(tmp_path)
+    paths = build_ces(
+        config_path,
+        "configs/crosswalks/ces_2024_profile.yaml",
+        "configs/crosswalks/ces_2024_pre_questions.yaml",
+        "configs/crosswalks/ces_2024_targets.yaml",
+        "configs/crosswalks/ces_2024_context.yaml",
+        tmp_path / "ces",
+    )
+    respondents = pd.read_parquet(paths["respondents"])
+    answers = pd.read_parquet(paths["answers"])
+    cohort = build_benchmark_cohort(respondents, seed=20260426)
+    strict = benchmark_feature_frame(cohort, answers, feature_mode="strict_pre")
+    poll = benchmark_feature_frame(cohort, answers, feature_mode="poll_informed")
+    assert not {"CC24_401", "CC24_410", "TS_g2024", "TS_partyreg", "CC24_363", "CC24_364a"} & set(strict.columns)
+    assert {"CC24_363", "CC24_364a"} <= set(poll.columns)
+    assert not {"CC24_401", "CC24_410", "TS_g2024", "TS_partyreg"} & set(poll.columns)
+
+
+def test_ces_benchmark_baselines_emit_canonical_schema(tmp_path):
+    config_path = _write_tiny_ces_fixture(tmp_path)
+    paths = build_ces(
+        config_path,
+        "configs/crosswalks/ces_2024_profile.yaml",
+        "configs/crosswalks/ces_2024_pre_questions.yaml",
+        "configs/crosswalks/ces_2024_targets.yaml",
+        "configs/crosswalks/ces_2024_context.yaml",
+        tmp_path / "ces",
+    )
+    respondents = pd.read_parquet(paths["respondents"])
+    answers = pd.read_parquet(paths["answers"])
+    targets = pd.read_parquet(paths["targets"])
+    cohort = build_benchmark_cohort(respondents, seed=20260426)
+    targets_wide = _target_wide(targets)
+    train_ids = set(cohort["ces_id"].head(1))
+    eval_ids = set(cohort["ces_id"])
+    for name in [
+        "majority_by_state",
+        "party_id_baseline",
+        "sklearn_logit_demographic_only",
+        "sklearn_logit_pre_only",
+        "sklearn_logit_poll_informed",
+    ]:
+        baseline = _baseline_factory(name)
+        baseline.fit(train_ids, cohort, answers, targets_wide)
+        predictions = baseline.predict(eval_ids, cohort)
+        assert not predictions.empty
+        assert set(predictions["raw_response"].map(lambda raw: parse_turnout_vote_json(raw)["parse_status"])) == {"ok"}
+
+
+def test_ces_benchmark_post_hoc_oracle_emits_label_implied_schema():
+    targets = pd.DataFrame(
+        [
+            {"ces_id": "1", "target_id": "turnout_2024_self_report", "canonical_value": "voted"},
+            {"ces_id": "1", "target_id": "president_vote_2024", "canonical_value": "democrat"},
+            {"ces_id": "2", "target_id": "turnout_2024_self_report", "canonical_value": "not_voted"},
+            {"ces_id": "2", "target_id": "president_vote_2024", "canonical_value": "not_vote"},
+        ]
+    )
+    voted = parse_turnout_vote_json(_post_hoc_oracle_raw(pd.Series({"base_ces_id": "1"}), _target_wide(targets)))
+    nonvoter = parse_turnout_vote_json(_post_hoc_oracle_raw(pd.Series({"base_ces_id": "2"}), _target_wide(targets)))
+    assert voted["parse_status"] == "ok"
+    assert voted["turnout_probability"] > 0.9
+    assert voted["most_likely_choice"] == "democrat"
+    assert nonvoter["parse_status"] == "ok"
+    assert nonvoter["turnout_probability"] < 0.1
+    assert nonvoter["most_likely_choice"] == "not_vote"
+
+
+def test_ces_benchmark_weighted_metrics_small_fixture():
+    cohort = pd.DataFrame(
+        {
+            "ces_id": ["1", "2"],
+            "sample_weight": [2.0, 1.0],
+            "party_id_3_pre": ["democrat", "republican"],
+            "ideology_3": ["liberal", "conservative"],
+            "race_ethnicity": ["white", "black"],
+            "education_binary": ["college_plus", "non_college"],
+            "age_group": ["30_44", "65_plus"],
+            "gender": ["female", "male"],
+            "state_po": ["PA", "PA"],
+            "state_party_id_3": ["PA x democrat", "PA x republican"],
+        }
+    )
+    targets = pd.DataFrame(
+        [
+            {"ces_id": "1", "target_id": "turnout_2024_self_report", "canonical_value": "voted"},
+            {"ces_id": "1", "target_id": "president_vote_2024", "canonical_value": "democrat"},
+            {"ces_id": "2", "target_id": "turnout_2024_self_report", "canonical_value": "not_voted"},
+            {"ces_id": "2", "target_id": "president_vote_2024", "canonical_value": "not_vote"},
+        ]
+    )
+    responses = pd.DataFrame(
+        [
+            {
+                "run_id": "r",
+                "baseline": "b",
+                "model_name": "m",
+                "base_ces_id": "1",
+                "parse_status": "ok",
+                "turnout_probability": 0.75,
+                "vote_prob_democrat": 0.8,
+                "vote_prob_republican": 0.1,
+                "vote_prob_other": 0.1,
+                "vote_prob_undecided": 0.0,
+                "sample_weight": 2.0,
+            },
+            {
+                "run_id": "r",
+                "baseline": "b",
+                "model_name": "m",
+                "base_ces_id": "2",
+                "parse_status": "ok",
+                "turnout_probability": 0.25,
+                "vote_prob_democrat": 0.2,
+                "vote_prob_republican": 0.7,
+                "vote_prob_other": 0.1,
+                "vote_prob_undecided": 0.0,
+                "sample_weight": 1.0,
+            },
+        ]
+    )
+    rows = pd.DataFrame(benchmark_metric_rows(responses, cohort, targets, "r", metric_scope="individual"))
+    weighted_brier = rows[
+        (rows["metric_name"] == "turnout_brier") & (rows["weighted"].astype(bool))
+    ]["metric_value"].iloc[0]
+    assert abs(weighted_brier - (((0.75 - 1) ** 2 * 2 + (0.25 - 0) ** 2) / 3)) < 1e-12
+    assert expected_calibration_error(pd.Series([1, 0]), pd.Series([0.75, 0.25]), pd.Series([2.0, 1.0]), n_bins=2) >= 0
+    probs = pd.DataFrame({"democrat": [0.8, 0.1], "republican": [0.1, 0.1], "other": [0.1, 0.1], "not_vote": [0.0, 0.7]})
+    assert multiclass_brier(pd.Series(["democrat", "not_vote"]), probs, pd.Series([2.0, 1.0])) >= 0
+
+
+def test_ces_individual_benchmark_runner_smoke(tmp_path):
+    config_path = _write_tiny_ces_fixture(tmp_path)
+    ces_paths = build_ces(
+        config_path,
+        "configs/crosswalks/ces_2024_profile.yaml",
+        "configs/crosswalks/ces_2024_pre_questions.yaml",
+        "configs/crosswalks/ces_2024_targets.yaml",
+        "configs/crosswalks/ces_2024_context.yaml",
+        tmp_path / "ces",
+    )
+    strict_memory = build_ces_memory_cards(
+        ces_paths["respondents"],
+        ces_paths["answers"],
+        "configs/fact_templates/ces_2024_common_facts.yaml",
+        "strict_pre_no_vote_v1",
+        tmp_path / "strict_memory",
+        max_facts=4,
+    )
+    poll_memory = build_ces_memory_cards(
+        ces_paths["respondents"],
+        ces_paths["answers"],
+        "configs/fact_templates/ces_2024_common_facts.yaml",
+        "poll_informed_pre_v1",
+        tmp_path / "poll_memory",
+        max_facts=4,
+    )
+    mit_truth = pd.DataFrame(
+        [
+            {
+                "year": 2024,
+                "geo_level": "state",
+                "state_po": "PA",
+                "dem_votes": 510000.0,
+                "rep_votes": 415000.0,
+                "other_votes": 10000.0,
+                "dem_share_2p": 510000.0 / 925000.0,
+                "rep_share_2p": 415000.0 / 925000.0,
+                "margin_2p": (510000.0 - 415000.0) / 925000.0,
+                "winner": "democrat",
+            }
+        ]
+    )
+    mit_path = tmp_path / "mit_truth.parquet"
+    mit_truth.to_parquet(mit_path, index=False)
+    run_config = tmp_path / "benchmark.yaml"
+    run_config.write_text(
+        "\n".join(
+            [
+                "run_id: tiny_benchmark",
+                "seed: 3",
+                "cohort:",
+                "  states: all",
+                "baselines:",
+                "  non_llm: [majority_by_state]",
+                "  llm: []",
+                "model:",
+                "  provider: mock",
+                "paths:",
+                f"  run_dir: {tmp_path / 'run'}",
+                f"  ces_respondents: {ces_paths['respondents']}",
+                f"  ces_answers: {ces_paths['answers']}",
+                f"  ces_targets: {ces_paths['targets']}",
+                f"  ces_context: {ces_paths['context']}",
+                f"  ces_memory_facts_strict: {strict_memory['facts']}",
+                f"  ces_memory_facts_poll: {poll_memory['facts']}",
+                "  question_set: configs/questions/ces_2024_president_turnout_vote.yaml",
+                f"  mit_state_truth: {mit_path}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    outputs = run_ces_individual_benchmark(run_config)
+    assert outputs["report"].exists()
+    responses = pd.read_parquet(outputs["responses"])
+    assert not responses.empty
+    assert set(responses["parse_status"]) == {"ok"}
+
+
+def test_ces_aggregate_nested_sampling_is_deterministic_and_nested():
+    cohort = pd.DataFrame(
+        {
+            "ces_id": [f"PA{i}" for i in range(6)] + [f"MI{i}" for i in range(5)],
+            "state_po": ["PA"] * 6 + ["MI"] * 5,
+            "sample_weight": [1.0, 2.0, 1.0, 3.0, 1.0, 1.0, 2.0, 1.0, 1.0, 1.0, 1.0],
+        }
+    )
+    first = build_nested_state_sample(cohort, states=["PA", "MI"], sample_sizes=[2, 4, 10], seed=7)
+    second = build_nested_state_sample(cohort, states=["PA", "MI"], sample_sizes=[2, 4, 10], seed=7)
+    assert first["ces_id"].tolist() == second["ces_id"].tolist()
+    agents = pd.DataFrame(
+        {
+            "agent_id": [f"a{i}" for i in range(len(first))],
+            "base_ces_id": first["ces_id"].astype(str).tolist(),
+        }
+    )
+    membership = build_sample_membership(first, agents, [2, 4, 10])
+    for state in ["PA", "MI"]:
+        ids2 = set(membership[(membership["sample_size"] == 2) & (membership["state_po"] == state)]["base_ces_id"])
+        ids4 = set(membership[(membership["sample_size"] == 4) & (membership["state_po"] == state)]["base_ces_id"])
+        ids10 = set(membership[(membership["sample_size"] == 10) & (membership["state_po"] == state)]["base_ces_id"])
+        assert ids2 <= ids4 <= ids10
+    assert membership[(membership["sample_size"] == 10) & (membership["state_po"] == "MI")]["effective_n_agents"].iloc[0] == 5
+
+
+def test_ces_aggregate_prior_formulas_match_fixture():
+    truth = pd.DataFrame(
+        [
+            {"year": 2020, "geo_level": "state", "state_po": "PA", "dem_votes": 55, "rep_votes": 45, "dem_share_2p": 0.55, "margin_2p": 0.10, "winner": "democrat"},
+            {"year": 2020, "geo_level": "state", "state_po": "MI", "dem_votes": 40, "rep_votes": 60, "dem_share_2p": 0.40, "margin_2p": -0.20, "winner": "republican"},
+            {"year": 2024, "geo_level": "state", "state_po": "PA", "dem_votes": 50, "rep_votes": 50, "dem_share_2p": 0.50, "margin_2p": 0.00, "winner": "tie"},
+            {"year": 2024, "geo_level": "state", "state_po": "MI", "dem_votes": 30, "rep_votes": 70, "dem_share_2p": 0.30, "margin_2p": -0.40, "winner": "republican"},
+        ]
+    )
+    prior = mit_2020_state_prior_predictions(truth, run_id="r", states=["PA", "MI"], sample_sizes=[2])
+    assert prior.set_index("state_po").loc["PA", "pred_dem_2p"] == 0.55
+    swing = uniform_national_swing_from_2020_predictions(truth, run_id="r", states=["PA", "MI"], sample_sizes=[2])
+    # National Dem two-party moved from 95/200 to 80/200, a -0.075 swing.
+    assert abs(swing.set_index("state_po").loc["PA", "pred_dem_2p"] - 0.475) < 1e-12
+    assert abs(swing.set_index("state_po").loc["MI", "pred_dem_2p"] - 0.325) < 1e-12
+
+
+def test_ces_aggregate_metrics_match_fixture():
+    state_predictions = pd.DataFrame(
+        [
+            {"sample_size": 2, "baseline": "b", "model_name": "m", "state_po": "PA", "pred_dem_2p": 0.55, "true_dem_2p": 0.50, "pred_margin": 0.10, "true_margin": 0.00, "error": 0.10, "pred_winner": "democrat", "true_winner": "tie"},
+            {"sample_size": 2, "baseline": "b", "model_name": "m", "state_po": "MI", "pred_dem_2p": 0.40, "true_dem_2p": 0.45, "pred_margin": -0.20, "true_margin": -0.10, "error": -0.10, "pred_winner": "republican", "true_winner": "republican"},
+        ]
+    )
+    metrics = pd.DataFrame(swing_aggregate_metric_rows(state_predictions, "r"))
+    lookup = metrics.set_index("metric_name")["metric_value"]
+    assert abs(lookup["dem_2p_rmse"] - 0.05) < 1e-12
+    assert abs(lookup["margin_mae"] - 0.10) < 1e-12
+    assert abs(lookup["margin_bias"]) < 1e-12
+    assert lookup["winner_flip_count"] == 1
+
+
+def test_ces_aggregate_skips_incomplete_limited_llm_sample_size():
+    responses = pd.DataFrame(
+        [
+            {
+                "base_ces_id": "a",
+                "baseline": "survey_memory_llm_strict",
+                "model_name": "mock",
+                "state_po": "PA",
+                "sample_weight": 1.0,
+                "agg_turnout_probability": 1.0,
+                "agg_vote_prob_democrat": 0.6,
+                "agg_vote_prob_republican": 0.4,
+                "agg_vote_prob_other": 0.0,
+                "agg_vote_prob_undecided": 0.0,
+                "aggregation_fallback_used": False,
+            }
+        ]
+    )
+    sampled = pd.DataFrame(
+        {
+            "ces_id": ["a", "b"],
+            "state_po": ["PA", "PA"],
+            "sample_rank": [1, 2],
+            "sample_weight": [1.0, 1.0],
+        }
+    )
+    sample_membership = pd.DataFrame(
+        [
+            {"sample_size": 1, "state_po": "PA", "base_ces_id": "a", "effective_n_agents": 1},
+            {"sample_size": 2, "state_po": "PA", "base_ces_id": "a", "effective_n_agents": 2},
+            {"sample_size": 2, "state_po": "PA", "base_ces_id": "b", "effective_n_agents": 2},
+        ]
+    )
+    mit_truth = pd.DataFrame(
+        [
+            {
+                "year": 2024,
+                "geo_level": "state",
+                "state_po": "PA",
+                "dem_share_2p": 0.5,
+                "margin_2p": 0.0,
+                "winner": "tie",
+            }
+        ]
+    )
+    predictions = _state_predictions_from_responses(
+        responses=responses,
+        sampled=sampled,
+        sample_membership=sample_membership,
+        mit_truth=mit_truth,
+        run_id="r",
+        states=["PA"],
+        sample_sizes=[1, 2],
+    )
+    assert predictions["sample_size"].tolist() == [1]
+    assert predictions["effective_n_agents"].tolist() == [1]
+
+
+def test_ces_aggregate_llm_cache_avoids_duplicate_calls(tmp_path):
+    class CountingClient:
+        def __init__(self):
+            self.count = 0
+
+        def complete(self, prompt_text, allowed):
+            self.count += 1
+            return format_turnout_vote_response(
+                turnout_probability=0.9,
+                vote_probabilities={"democrat": 0.7, "republican": 0.2, "other": 0.05, "undecided": 0.05},
+                most_likely_choice="democrat",
+                confidence=0.8,
+            )
+
+    cache = AggregateLlmCache(tmp_path / "cache.jsonl")
+    client = CountingClient()
+    kwargs = {
+        "client": client,
+        "cache": cache,
+        "cache_key": "k",
+        "run_id": "r",
+        "model_name": "m",
+        "baseline": "b",
+        "prompt_hash": "h",
+        "prompt_text": "prompt",
+    }
+    first = complete_llm_task_with_cache(**kwargs)
+    second = complete_llm_task_with_cache(**kwargs)
+    assert client.count == 1
+    assert first[1] is False
+    assert second[1] is True
+
+
+def test_ces_aggregate_benchmark_runner_smoke(tmp_path):
+    config_path = _write_tiny_ces_fixture(tmp_path)
+    ces_paths = build_ces(
+        config_path,
+        "configs/crosswalks/ces_2024_profile.yaml",
+        "configs/crosswalks/ces_2024_pre_questions.yaml",
+        "configs/crosswalks/ces_2024_targets.yaml",
+        "configs/crosswalks/ces_2024_context.yaml",
+        tmp_path / "ces",
+    )
+    strict_memory = build_ces_memory_cards(
+        ces_paths["respondents"],
+        ces_paths["answers"],
+        "configs/fact_templates/ces_2024_common_facts.yaml",
+        "strict_pre_no_vote_v1",
+        tmp_path / "strict_memory",
+        max_facts=4,
+    )
+    poll_memory = build_ces_memory_cards(
+        ces_paths["respondents"],
+        ces_paths["answers"],
+        "configs/fact_templates/ces_2024_common_facts.yaml",
+        "poll_informed_pre_v1",
+        tmp_path / "poll_memory",
+        max_facts=4,
+    )
+    mit_truth = pd.DataFrame(
+        [
+            {"year": 2020, "geo_level": "state", "state_po": "PA", "dem_votes": 55.0, "rep_votes": 45.0, "dem_share_2p": 0.55, "margin_2p": 0.10, "winner": "democrat"},
+            {"year": 2024, "geo_level": "state", "state_po": "PA", "dem_votes": 50.0, "rep_votes": 50.0, "dem_share_2p": 0.50, "margin_2p": 0.00, "winner": "tie"},
+        ]
+    )
+    mit_path = tmp_path / "mit_truth.parquet"
+    mit_truth.to_parquet(mit_path, index=False)
+    run_config = tmp_path / "aggregate.yaml"
+    run_config.write_text(
+        "\n".join(
+            [
+                "run_id: tiny_aggregate",
+                "seed: 3",
+                "states: [PA]",
+                "sample_sizes: [1, 2]",
+                "baselines:",
+                "  llm: [survey_memory_llm_strict, survey_memory_llm_poll_informed]",
+                "memory:",
+                "  max_memory_facts: 4",
+                "llm:",
+                "  timing_responses: 1",
+                "  max_runtime_hours: 4.0",
+                "  min_sample_size: 1",
+                "  workers: 2",
+                "model:",
+                "  provider: mock",
+                "  model_name: mock-voter-v1",
+                "  temperature: 0.0",
+                "  max_tokens: 120",
+                "  response_format: json",
+                "paths:",
+                f"  run_dir: {tmp_path / 'run'}",
+                f"  ces_respondents: {ces_paths['respondents']}",
+                f"  ces_answers: {ces_paths['answers']}",
+                f"  ces_targets: {ces_paths['targets']}",
+                f"  ces_context: {ces_paths['context']}",
+                f"  ces_memory_facts_strict: {strict_memory['facts']}",
+                f"  ces_memory_facts_poll: {poll_memory['facts']}",
+                "  question_set: configs/questions/ces_2024_president_turnout_vote.yaml",
+                f"  mit_state_truth: {mit_path}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    outputs = run_ces_aggregate_benchmark(run_config)
+    assert outputs["report"].exists()
+    predictions = pd.read_parquet(outputs["state_predictions"])
+    assert {"mit_2020_state_prior", "uniform_national_swing_from_2020", "ces_post_self_report_aggregate_oracle"} <= set(predictions["baseline"])
+    responses = pd.read_parquet(outputs["responses"])
+    assert responses[responses["baseline"] == "ces_post_self_report_aggregate_oracle"]["parse_status"].eq("ok").all()
+    assert any((tmp_path / "run" / "figures").glob("*.png"))
+
+
+def test_ces_ablation_prompt_information_conditions_are_distinct():
+    agent = pd.Series(
+        {
+            "base_ces_id": "101",
+            "state_po": "PA",
+            "age_group": "30_44",
+            "gender": "female",
+            "race_ethnicity": "white",
+            "education_binary": "college_plus",
+            "party_id_3": "democrat",
+            "party_id_7": "Strong Democrat",
+            "ideology_3": "liberal",
+        }
+    )
+    question = pd.Series({"question_id": "president_turnout_vote_2024"})
+    strict_memory = {
+        "101": pd.DataFrame(
+            [
+                {
+                    "memory_fact_id": "safe1",
+                    "fact_text": "Strict memory says the respondent follows politics closely.",
+                    "fact_role": "safe_pre",
+                    "fact_priority": 10,
+                    "source_variable": "CC24_303",
+                },
+                {
+                    "memory_fact_id": "poll1",
+                    "fact_text": "Poll prior should be excluded from strict memory.",
+                    "fact_role": "poll_prior",
+                    "fact_priority": 99,
+                    "source_variable": "CC24_363",
+                },
+            ]
+        )
+    }
+    poll_memory = {
+        "101": pd.DataFrame(
+            [
+                {
+                    "memory_fact_id": "poll1",
+                    "fact_text": "Poll prior says the respondent intended to vote for the Democrat.",
+                    "fact_role": "poll_prior",
+                    "fact_priority": 99,
+                    "source_variable": "CC24_363",
+                }
+            ]
+        )
+    }
+    context = {"101": [{"candidate_party": "Democratic", "candidate_name": "Kamala Harris"}, {"candidate_party": "Republican", "candidate_name": "Donald Trump"}]}
+    targets = _target_wide(
+        pd.DataFrame(
+            [
+                {"ces_id": "101", "target_id": "turnout_2024_self_report", "canonical_value": "voted"},
+                {"ces_id": "101", "target_id": "president_vote_2024", "canonical_value": "democrat"},
+            ]
+        )
+    )
+    common = dict(
+        agent=agent,
+        question=question,
+        strict_memory=strict_memory,
+        poll_memory=poll_memory,
+        context=context,
+        targets_wide=targets,
+        donor_maps={},
+        max_memory_facts=4,
+    )
+    l1, _, _ = render_ablation_prompt(baseline="L1_demographic_only_llm", **common)
+    assert "State: PA" not in l1
+    assert "Party identification" not in l1
+    assert "Kamala Harris" not in l1
+    l2, _, _ = render_ablation_prompt(baseline="L2_demographic_state_llm", **common)
+    assert "State: PA" in l2
+    assert "Party identification" not in l2
+    l3, _, _ = render_ablation_prompt(baseline="L3_party_ideology_llm", **common)
+    assert "Party identification: democrat" in l3
+    assert "Kamala Harris" not in l3
+    l4, _, _ = render_ablation_prompt(baseline="L4_party_ideology_context_llm", **common)
+    assert "Kamala Harris" in l4
+    l5, _, _ = render_ablation_prompt(baseline="L5_strict_memory_llm", **common)
+    assert "Strict memory says" in l5
+    assert "Poll prior should be excluded" not in l5
+    assert "Kamala Harris" not in l5
+    l7, _, _ = render_ablation_prompt(baseline="L7_poll_informed_memory_context_llm", **common)
+    assert "Poll prior says" in l7
+    l8, _, _ = render_ablation_prompt(baseline="L8_post_hoc_oracle_memory_context_llm", **common)
+    assert "Leakage upper bound" in l8
+    assert "post-election presidential vote label is democrat" in l8
+
+
+def test_ces_ablation_memory_donor_and_runtime_gate():
+    agents = pd.DataFrame(
+        {
+            "base_ces_id": ["a", "b", "c"],
+            "state_po": ["PA", "PA", "GA"],
+            "party_id_3": ["democrat", "democrat", "republican"],
+        }
+    )
+    state_map = build_memory_donor_map(agents, scope="state", seed=7)
+    party_map = build_memory_donor_map(agents, scope="party", seed=7)
+    assert state_map["a"]["memory_donor_ces_id"] == "b"
+    assert party_map["a"]["memory_donor_ces_id"] == "b"
+    assert state_map["a"]["memory_donor_ces_id"] != "a"
+    effective, reason, projected = choose_effective_agents_per_state(
+        requested_main_per_state=50,
+        diagnostic_boost_per_state=10,
+        n_states=4,
+        n_baselines=10,
+        observed_throughput_per_second=0.5,
+        max_runtime_minutes=45,
+    )
+    assert effective == 30
+    assert reason is not None
+    assert projected is not None
+
+
+def test_ces_ablation_benchmark_runner_smoke(tmp_path):
+    config_path = _write_tiny_ces_fixture(tmp_path)
+    ces_paths = build_ces(
+        config_path,
+        "configs/crosswalks/ces_2024_profile.yaml",
+        "configs/crosswalks/ces_2024_pre_questions.yaml",
+        "configs/crosswalks/ces_2024_targets.yaml",
+        "configs/crosswalks/ces_2024_context.yaml",
+        tmp_path / "ces",
+    )
+    strict_memory = build_ces_memory_cards(
+        ces_paths["respondents"],
+        ces_paths["answers"],
+        "configs/fact_templates/ces_2024_common_facts.yaml",
+        "strict_pre_no_vote_v1",
+        tmp_path / "strict_memory",
+        max_facts=4,
+    )
+    poll_memory = build_ces_memory_cards(
+        ces_paths["respondents"],
+        ces_paths["answers"],
+        "configs/fact_templates/ces_2024_common_facts.yaml",
+        "poll_informed_pre_v1",
+        tmp_path / "poll_memory",
+        max_facts=4,
+    )
+    mit_truth = pd.DataFrame(
+        [
+            {"year": 2024, "geo_level": "state", "state_po": "PA", "dem_votes": 50.0, "rep_votes": 50.0, "dem_share_2p": 0.50, "margin_2p": 0.00, "winner": "tie"},
+        ]
+    )
+    mit_path = tmp_path / "mit_truth.parquet"
+    mit_truth.to_parquet(mit_path, index=False)
+    run_config = tmp_path / "ablation.yaml"
+    run_config.write_text(
+        "\n".join(
+            [
+                "run_id: tiny_ablation",
+                "seed: 3",
+                "states: [PA]",
+                "main_agents_per_state: 1",
+                "diagnostic_boost_per_state: 0",
+                "memory:",
+                "  max_memory_facts: 4",
+                "llm:",
+                "  timing_responses: 1",
+                "  max_runtime_minutes: 45",
+                "  workers: 2",
+                "model:",
+                "  provider: mock",
+                "  model_name: mock-voter-v1",
+                "  temperature: 0.0",
+                "  max_tokens: 120",
+                "  response_format: json",
+                "paths:",
+                f"  run_dir: {tmp_path / 'run'}",
+                f"  ces_respondents: {ces_paths['respondents']}",
+                f"  ces_targets: {ces_paths['targets']}",
+                f"  ces_context: {ces_paths['context']}",
+                f"  ces_memory_facts_strict: {strict_memory['facts']}",
+                f"  ces_memory_facts_poll: {poll_memory['facts']}",
+                "  question_set: configs/questions/ces_2024_president_turnout_vote.yaml",
+                f"  mit_state_truth: {mit_path}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    outputs = run_ces_ablation_benchmark(run_config)
+    assert outputs["report"].exists()
+    responses = pd.read_parquet(outputs["responses"])
+    assert set(responses["baseline"]) >= {"L1_demographic_only_llm", "L8_post_hoc_oracle_memory_context_llm"}
+    assert responses["parse_status"].eq("ok").all()
+    assert pd.read_parquet(outputs["memory_placebo_diagnostics"]).shape[0] >= 1
+    assert any((tmp_path / "run" / "figures").glob("*.png"))
+
+
+def test_ces_leakage_prompt_masks_and_swaps_information():
+    agent = pd.Series(
+        {
+            "base_ces_id": "101",
+            "state_po": "PA",
+            "age_group": "30_44",
+            "gender": "female",
+            "race_ethnicity": "white",
+            "education_binary": "college_plus",
+            "party_id_3": "democrat",
+            "party_id_7": "Strong Democrat",
+            "ideology_3": "liberal",
+        }
+    )
+    strict_memory = {
+        "101": pd.DataFrame(
+            [
+                {
+                    "memory_fact_id": "safe1",
+                    "fact_text": "The respondent has favorable views of Kamala Harris.",
+                    "fact_role": "safe_pre",
+                    "fact_priority": 10,
+                    "source_variable": "CC24_320a",
+                },
+                {
+                    "memory_fact_id": "safe2",
+                    "fact_text": "The respondent dislikes Donald Trump and approves of President Biden in 2024.",
+                    "fact_role": "safe_pre",
+                    "fact_priority": 9,
+                    "source_variable": "CC24_320b",
+                },
+            ]
+        )
+    }
+    common = dict(agent=agent, strict_memory=strict_memory, max_memory_facts=4)
+
+    named, _, _ = render_leakage_prompt(condition="named_candidates", **common)
+    assert "- State: PA" in named
+    assert "the 2024 general election" in named
+    assert "Kamala Harris" in named
+    assert "Donald Trump" in named
+
+    party_only, _, _ = render_leakage_prompt(condition="party_only_candidates", **common)
+    assert "Democratic nominee" in party_only
+    assert "Republican nominee" in party_only
+    assert not any(name in party_only for name in ["Kamala", "Harris", "Donald", "Trump", "Biden"])
+
+    anonymous, _, _ = render_leakage_prompt(condition="anonymous_candidates", **common)
+    assert "Candidate A" in anonymous
+    assert "Candidate B" in anonymous
+    assert not any(name in anonymous for name in ["Kamala", "Harris", "Donald", "Trump", "Biden"])
+
+    masked_year, _, _ = render_leakage_prompt(condition="masked_year", **common)
+    assert "a recent presidential election" in masked_year
+    assert "2024" not in masked_year
+    assert not any(name in masked_year for name in ["Kamala", "Harris", "Donald", "Trump", "Biden"])
+
+    masked_state, _, meta = render_leakage_prompt(condition="masked_state", **common)
+    assert meta["displayed_state_po"] == "F01"
+    assert "- State: F01" in masked_state
+    assert "- State: PA" not in masked_state
+    assert "Kamala Harris" in masked_state
+
+    state_swap, _, meta = render_leakage_prompt(condition="state_swap_placebo", **common)
+    assert meta["displayed_state_po"] == "MN"
+    assert "- State: MN" in state_swap
+    assert "Kamala Harris" in state_swap
+
+    candidate_swap, _, meta = render_leakage_prompt(condition="candidate_swap_placebo", **common)
+    assert meta["candidate_mode"] == "candidate_swap"
+    assert "Democratic candidate: Donald Trump" in candidate_swap
+    assert "Republican candidate: Kamala Harris" in candidate_swap
+
+
+def test_ces_leakage_anonymous_response_normalizes_to_canonical_schema():
+    raw = json.dumps(
+        {
+            "turnout_probability": 0.75,
+            "vote_probabilities": {"candidate_a": 0.6, "candidate_b": 0.3, "other": 0.05, "undecided": 0.05},
+            "most_likely_choice": "candidate_a",
+            "confidence": 0.8,
+        }
+    )
+    normalized = normalize_leakage_response(raw, "anonymous_candidates")
+    parsed = parse_turnout_vote_json(normalized)
+    assert parsed["parse_status"] == "ok"
+    assert parsed["vote_prob_democrat"] == 0.6
+    assert parsed["vote_prob_republican"] == 0.3
+    assert parsed["most_likely_choice"] == "democrat"
+
+
+def test_ces_leakage_runtime_gate_and_contrast_fixtures():
+    effective, reason, projected = choose_leakage_effective_agents_per_state(
+        requested_agents_per_state=40,
+        n_states=6,
+        n_conditions=7,
+        observed_throughput_per_second=0.2,
+        max_runtime_minutes=45,
+    )
+    assert effective == 30
+    assert reason == "runtime_reduced_to_30"
+    assert projected is not None
+
+    state_predictions = pd.DataFrame(
+        [
+            {"condition": "named_candidates", "baseline": "named_candidates", "model_name": "m", "state_po": "PA", "displayed_state_po": "PA", "pred_margin": 0.10, "pred_dem_2p": 0.55, "error": 0.10},
+            {"condition": "state_swap_placebo", "baseline": "state_swap_placebo", "model_name": "m", "state_po": "PA", "displayed_state_po": "MN", "pred_margin": -0.20, "pred_dem_2p": 0.40, "error": -0.20},
+        ]
+    )
+    mit_truth = pd.DataFrame(
+        [
+            {"year": 2024, "geo_level": "state", "state_po": "PA", "margin_2p": 0.00, "dem_share_2p": 0.50, "winner": "tie"},
+            {"year": 2024, "geo_level": "state", "state_po": "MN", "margin_2p": -0.25, "dem_share_2p": 0.375, "winner": "republican"},
+        ]
+    )
+    state_swap = state_swap_diagnostics(state_predictions, mit_truth, "r")
+    row = state_swap.iloc[0]
+    assert abs(row["pred_shift"] + 0.30) < 1e-12
+    assert abs(row["truth_shift"] + 0.25) < 1e-12
+
+    individual_metrics = pd.DataFrame(
+        [
+            {"metric_scope": "individual", "weighted": True, "baseline": "named_candidates", "metric_name": "vote_accuracy", "metric_value": 0.6},
+            {"metric_scope": "individual", "weighted": True, "baseline": "party_only_candidates", "metric_name": "vote_accuracy", "metric_value": 0.55},
+        ]
+    )
+    aggregate_metrics = pd.DataFrame(
+        [
+            {"baseline": "named_candidates", "metric_name": "margin_mae", "metric_value": 0.05},
+            {"baseline": "named_candidates", "metric_name": "dem_2p_rmse", "metric_value": 0.025},
+            {"baseline": "party_only_candidates", "metric_name": "margin_mae", "metric_value": 0.09},
+            {"baseline": "party_only_candidates", "metric_name": "dem_2p_rmse", "metric_value": 0.045},
+        ]
+    )
+    contrasts = leakage_contrast_rows(
+        individual_metrics=individual_metrics,
+        aggregate_metrics=aggregate_metrics,
+        state_swap=state_swap,
+        candidate_swap=pd.DataFrame(),
+        run_id="r",
+    )
+    advantage = contrasts[
+        (contrasts["contrast_name"] == "named_aggregate_advantage")
+        & (contrasts["comparison_condition"] == "party_only_candidates")
+        & (contrasts["metric_name"] == "margin_mae")
+    ].iloc[0]
+    assert abs(advantage["named_improvement"] - 0.04) < 1e-12
+
+
+def test_ces_leakage_benchmark_runner_smoke(tmp_path):
+    config_path = _write_tiny_ces_fixture(tmp_path)
+    ces_paths = build_ces(
+        config_path,
+        "configs/crosswalks/ces_2024_profile.yaml",
+        "configs/crosswalks/ces_2024_pre_questions.yaml",
+        "configs/crosswalks/ces_2024_targets.yaml",
+        "configs/crosswalks/ces_2024_context.yaml",
+        tmp_path / "ces",
+    )
+    strict_memory = build_ces_memory_cards(
+        ces_paths["respondents"],
+        ces_paths["answers"],
+        "configs/fact_templates/ces_2024_common_facts.yaml",
+        "strict_pre_no_vote_v1",
+        tmp_path / "strict_memory",
+        max_facts=4,
+    )
+    mit_truth = pd.DataFrame(
+        [
+            {"year": 2024, "geo_level": "state", "state_po": "PA", "dem_votes": 50.0, "rep_votes": 50.0, "dem_share_2p": 0.50, "margin_2p": 0.00, "winner": "tie"},
+            {"year": 2024, "geo_level": "state", "state_po": "MN", "dem_votes": 45.0, "rep_votes": 55.0, "dem_share_2p": 0.45, "margin_2p": -0.10, "winner": "republican"},
+        ]
+    )
+    mit_path = tmp_path / "mit_truth.parquet"
+    mit_truth.to_parquet(mit_path, index=False)
+    run_config = tmp_path / "leakage.yaml"
+    run_config.write_text(
+        "\n".join(
+            [
+                "run_id: tiny_leakage",
+                "seed: 3",
+                "states: [PA]",
+                "agents_per_state: 1",
+                "memory:",
+                "  max_memory_facts: 4",
+                "llm:",
+                "  timing_responses: 1",
+                "  max_runtime_minutes: 45",
+                "  workers: 2",
+                "model:",
+                "  provider: mock",
+                "  model_name: mock-voter-v1",
+                "  temperature: 0.0",
+                "  max_tokens: 120",
+                "  response_format: json",
+                "paths:",
+                f"  run_dir: {tmp_path / 'run'}",
+                f"  ces_respondents: {ces_paths['respondents']}",
+                f"  ces_targets: {ces_paths['targets']}",
+                f"  ces_memory_facts_strict: {strict_memory['facts']}",
+                f"  mit_state_truth: {mit_path}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    outputs = run_ces_leakage_benchmark(run_config)
+    assert outputs["report"].exists()
+    responses = pd.read_parquet(outputs["responses"])
+    assert {
+        "named_candidates",
+        "party_only_candidates",
+        "anonymous_candidates",
+        "masked_year",
+        "masked_state",
+        "state_swap_placebo",
+        "candidate_swap_placebo",
+    } <= set(responses["baseline"])
+    assert responses["parse_status"].eq("ok").all()
+    assert pd.read_parquet(outputs["condition_metadata"])["displayed_state_po"].notna().all()
+    assert any((tmp_path / "run" / "figures").glob("*.png"))
 
 
 def test_ces_llm_prompt_information_conditions_are_distinct():

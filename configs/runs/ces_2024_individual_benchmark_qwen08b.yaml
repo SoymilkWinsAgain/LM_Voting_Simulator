@@ -1,0 +1,55 @@
+run_id: ces_2024_individual_benchmark_qwen08b_v1
+seed: 20260426
+mode: ces_individual_benchmark
+
+cohort:
+  source: ces_rows
+  states: all
+  tookpost_required: true
+  citizen_required: true
+  weight_column: weight_common_post
+
+baselines:
+  non_llm:
+    - majority_by_state
+    - party_id_baseline
+    - sklearn_logit_demographic_only
+    - sklearn_logit_pre_only
+    - sklearn_logit_poll_informed
+  llm:
+    - ces_demographic_only_llm
+    - ces_party_ideology_llm
+    - ces_survey_memory_llm_strict
+    - ces_survey_memory_llm_poll_informed
+    - post_hoc_oracle_llm
+
+memory:
+  max_memory_facts: 24
+
+llm_pilot:
+  max_respondents: 750
+  slow_cap_respondents: 300
+  per_state_target: 10
+  timing_responses: 50
+  timing_threshold_seconds: 6.0
+  max_runtime_minutes: 60.0
+
+model:
+  provider: ollama
+  base_url: http://172.26.48.1:11434
+  model_name: qwen3.5:0.8b
+  temperature: 0.0
+  max_tokens: 400
+  response_format: json
+  cache_enabled: true
+
+paths:
+  run_dir: data/runs/ces_2024_individual_benchmark_qwen08b_v1
+  ces_respondents: data/processed/ces/2024_common_vv/ces_respondents.parquet
+  ces_answers: data/processed/ces/2024_common_vv/ces_answers.parquet
+  ces_targets: data/processed/ces/2024_common_vv/ces_targets.parquet
+  ces_context: data/processed/ces/2024_common_vv/ces_context.parquet
+  ces_memory_facts_strict: data/processed/ces/2024_common_vv/ces_memory_facts.parquet
+  ces_memory_facts_poll: data/processed/ces/2024_common_vv_poll/ces_memory_facts.parquet
+  question_set: configs/questions/ces_2024_president_turnout_vote.yaml
+  mit_state_truth: data/processed/mit/president_state_truth.parquet

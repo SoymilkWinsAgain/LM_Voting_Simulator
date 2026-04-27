@@ -10,6 +10,10 @@ from .anes import build_anes, build_memory_cards
 from .ces import build_ces as build_ces_pipeline
 from .ces import build_ces_cells as build_ces_cells_pipeline
 from .ces import build_ces_memory_cards as build_ces_memory_pipeline
+from .ces_aggregate_benchmark import run_ces_aggregate_benchmark
+from .ces_ablation_benchmark import run_ces_ablation_benchmark
+from .ces_benchmark import run_ces_individual_benchmark
+from .ces_leakage_benchmark import run_ces_leakage_benchmark
 from .config import load_run_config
 from .mit import build_mit_results as build_mit_results_pipeline
 from .mit import write_mit_processed_artifacts
@@ -127,6 +131,34 @@ def build_agents_command(
 @app.command("run-simulation")
 def run_simulation_command(run_config: Path = typer.Option(..., "--run-config")) -> None:
     outputs = run_simulation(run_config)
+    for name, path in outputs.items():
+        typer.echo(f"{name}: {path}")
+
+
+@app.command("run-ces-individual-benchmark")
+def run_ces_individual_benchmark_command(config: Path = typer.Option(..., "--config")) -> None:
+    outputs = run_ces_individual_benchmark(config)
+    for name, path in outputs.items():
+        typer.echo(f"{name}: {path}")
+
+
+@app.command("run-ces-aggregate-benchmark")
+def run_ces_aggregate_benchmark_command(config: Path = typer.Option(..., "--config")) -> None:
+    outputs = run_ces_aggregate_benchmark(config)
+    for name, path in outputs.items():
+        typer.echo(f"{name}: {path}")
+
+
+@app.command("run-ces-ablation-benchmark")
+def run_ces_ablation_benchmark_command(config: Path = typer.Option(..., "--config")) -> None:
+    outputs = run_ces_ablation_benchmark(config)
+    for name, path in outputs.items():
+        typer.echo(f"{name}: {path}")
+
+
+@app.command("run-ces-leakage-benchmark")
+def run_ces_leakage_benchmark_command(config: Path = typer.Option(..., "--config")) -> None:
+    outputs = run_ces_leakage_benchmark(config)
     for name, path in outputs.items():
         typer.echo(f"{name}: {path}")
 
