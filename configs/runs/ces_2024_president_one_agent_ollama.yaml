@@ -28,7 +28,7 @@ memory:
   max_memory_facts: 24
 
 baselines:
-  - survey_memory_llm
+  - ces_survey_memory_llm
 
 model:
   provider: ollama

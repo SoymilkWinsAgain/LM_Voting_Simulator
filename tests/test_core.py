@@ -16,7 +16,13 @@ from election_sim.gdelt import load_context_cards, select_context_cards
 from election_sim.io import load_yaml
 from election_sim.mit import normalize_mit_results, state_truth_table, write_mit_processed_artifacts
 from election_sim.population import build_agents_from_ces_rows, build_agents_from_frames
-from election_sim.prompts import build_prompt, parse_json_answer, parse_turnout_vote_json
+from election_sim.prompts import (
+    CES_LLM_BASELINE_PROMPT_MODES,
+    build_ces_prompt,
+    build_prompt,
+    parse_json_answer,
+    parse_turnout_vote_json,
+)
 from election_sim.questions import load_question_config
 from election_sim.reference_data import STATE_FIPS_TO_PO, STATE_PO, SWING_STATES_2024, leakage_policy_reference
 from election_sim.simulation import run_simulation
@@ -457,6 +463,118 @@ def test_ces_non_llm_baselines_emit_canonical_schema(tmp_path):
     for baseline in baselines.values():
         parsed = parse_turnout_vote_json(baseline.predict(agents.iloc[0]).raw_response)
         assert parsed["parse_status"] == "ok"
+
+
+def test_ces_llm_prompt_information_conditions_are_distinct():
+    agent = pd.Series(
+        {
+            "base_ces_id": "101",
+            "source_respondent_id": "101",
+            "state_po": "PA",
+            "age_group": "30_44",
+            "gender": "female",
+            "race_ethnicity": "white",
+            "education_binary": "non_college",
+            "party_id_3": "republican",
+            "party_id_7": "Strong Republican",
+            "ideology_3": "conservative",
+            "registered_self_pre": "yes",
+        }
+    )
+    question = pd.Series({"question_id": "president_turnout_vote_2024", "topic": "vote_choice"})
+    context = pd.DataFrame(
+        [
+            {
+                "ces_id": "101",
+                "candidate_party": "Democratic",
+                "candidate_name": "Kamala Harris",
+            },
+            {
+                "ces_id": "101",
+                "candidate_party": "Republican",
+                "candidate_name": "Donald Trump",
+            },
+        ]
+    )
+    memory_facts = pd.DataFrame(
+        [
+            {
+                "memory_fact_id": "safe",
+                "ces_id": "101",
+                "source_variable": "CC24_303",
+                "fact_text": "Safe economy fact.",
+                "fact_priority": 10,
+                "safe_as_memory": True,
+                "allowed_memory_policies": ["poll_informed_pre_v1"],
+                "fact_role": "safe_pre",
+            },
+            {
+                "memory_fact_id": "poll",
+                "ces_id": "101",
+                "source_variable": "CC24_363",
+                "fact_text": "Poll-prior candidate preference fact.",
+                "fact_priority": 9,
+                "safe_as_memory": True,
+                "allowed_memory_policies": ["poll_informed_pre_v1"],
+                "fact_role": "poll_prior",
+            },
+        ]
+    )
+
+    demo_prompt, demo_facts = build_ces_prompt(
+        agent,
+        question,
+        memory_facts=memory_facts,
+        context=context,
+        memory_policy="poll_informed_pre_v1",
+        prompt_mode="ces_demographic_only",
+    )
+    party_prompt, party_facts = build_ces_prompt(
+        agent,
+        question,
+        memory_facts=memory_facts,
+        context=context,
+        memory_policy="poll_informed_pre_v1",
+        prompt_mode="ces_party_ideology",
+    )
+    survey_prompt, survey_facts = build_ces_prompt(
+        agent,
+        question,
+        memory_facts=memory_facts,
+        context=context,
+        memory_policy="poll_informed_pre_v1",
+        prompt_mode="ces_survey_memory",
+    )
+    poll_prompt, poll_facts = build_ces_prompt(
+        agent,
+        question,
+        memory_facts=memory_facts,
+        context=context,
+        memory_policy="poll_informed_pre_v1",
+        prompt_mode="ces_poll_informed",
+    )
+
+    assert "Party identification" not in demo_prompt
+    assert "Ideology" not in demo_prompt
+    assert "Survey-derived background facts" not in demo_prompt
+    assert "Registered to vote" not in demo_prompt
+    assert demo_facts == []
+
+    assert "Party identification: republican" in party_prompt
+    assert "Ideology: conservative" in party_prompt
+    assert "Survey-derived background facts" not in party_prompt
+    assert "Registered to vote" not in party_prompt
+    assert party_facts == []
+
+    assert "Safe economy fact." in survey_prompt
+    assert "Poll-prior candidate preference fact." not in survey_prompt
+    assert survey_facts == ["safe"]
+
+    assert "Safe economy fact." in poll_prompt
+    assert "Poll-prior candidate preference fact." in poll_prompt
+    assert poll_facts == ["safe", "poll"]
+    assert CES_LLM_BASELINE_PROMPT_MODES["ces_poll_informed_llm"] == "ces_poll_informed"
+    assert CES_LLM_BASELINE_PROMPT_MODES["survey_memory_llm"] == "ces_survey_memory"
 
 
 def test_archetype_matcher_returns_required_count(tmp_path):

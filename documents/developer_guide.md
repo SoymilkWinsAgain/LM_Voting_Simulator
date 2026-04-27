@@ -155,6 +155,22 @@ parse_status
 Do not add a second CES parser for the same task. Extend the shared schema if
 the task contract changes.
 
+## CES LLM Information Conditions
+
+CES LLM baselines must differ by prompt information, not just by label:
+
+| Baseline | Prompt information |
+| --- | --- |
+| `ces_demographic_only_llm` | State, age group, gender, race/ethnicity, education. |
+| `ces_party_ideology_llm` | Demographics plus party ID and ideology. |
+| `ces_survey_memory_llm` | Demographics plus party/ideology and strict `safe_pre` memory facts. |
+| `ces_poll_informed_llm` | Demographics plus party/ideology, strict memory facts, and `poll_prior` facts. |
+
+`build_ces_prompt()` enforces these modes. Do not route these baselines through
+one shared prompt that always includes party, ideology, registration status, and
+survey memory. The older names `demographic_only_llm`, `party_ideology_llm`, and
+`survey_memory_llm` are compatibility aliases only.
+
 ## Leakage Rules
 
 The formal prediction policy is `strict_pre_no_vote_v1`.

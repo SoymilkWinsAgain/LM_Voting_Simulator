@@ -36,7 +36,7 @@ prompt:
   include_gdelt_context: false
 
 baselines:
-  - survey_memory_llm
+  - ces_survey_memory_llm
   - party_id_baseline
   - sklearn_logit_pre_only
 

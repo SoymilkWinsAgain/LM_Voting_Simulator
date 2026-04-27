@@ -24,7 +24,14 @@ from .io import ensure_dir, stable_json, write_table
 from .llm import build_llm_client
 from .mit import build_mit_results, normalize_mit_results
 from .population import agent_response_id, build_agents_from_ces_rows, build_agents_from_frames
-from .prompts import build_ces_prompt, build_prompt, options_from_question, parse_json_answer, parse_turnout_vote_json
+from .prompts import (
+    CES_LLM_BASELINE_PROMPT_MODES,
+    build_ces_prompt,
+    build_prompt,
+    options_from_question,
+    parse_json_answer,
+    parse_turnout_vote_json,
+)
 from .questions import load_question_config
 from .report import write_ces_eval_report, write_eval_report, write_individual_report
 from .transforms import stable_hash
@@ -494,10 +501,8 @@ def run_ces_election_simulation(run_config_path: str | Path) -> dict[str, Path]:
 
     llm_client = build_llm_client(cfg.model)
     model_name = getattr(llm_client, "model_name", cfg.model.model_name)
-    baseline_names = cfg.baselines or ["survey_memory_llm"]
-    llm_baseline_names = [
-        name for name in baseline_names if name in {"survey_memory_llm", "demographic_only_llm", "party_ideology_llm"}
-    ]
+    baseline_names = cfg.baselines or ["ces_survey_memory_llm"]
+    llm_baseline_names = [name for name in baseline_names if name in CES_LLM_BASELINE_PROMPT_MODES]
     non_llm_baselines = build_ces_non_llm_baselines(
         [name for name in baseline_names if name not in set(llm_baseline_names)],
         respondents=respondents,
@@ -522,6 +527,7 @@ def run_ces_election_simulation(run_config_path: str | Path) -> dict[str, Path]:
                     context=context,
                     memory_policy=memory_policy,
                     max_memory_facts=max_memory,
+                    prompt_mode=CES_LLM_BASELINE_PROMPT_MODES[baseline_name],
                 )
                 raw = llm_client.complete(prompt_text, ["democrat", "republican", "other", "undecided", "not_vote"])
                 response_model_name = model_name

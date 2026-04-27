@@ -95,15 +95,18 @@ Voter profile:
 - Gender: {{ gender }}
 - Race/ethnicity: {{ race_ethnicity }}
 - Education: {{ education_binary }}
+{% if include_party_ideology -%}
 - Party identification: {{ party_id_3 }}
 - 7-point party ID: {{ party_id_7 }}
 - Ideology: {{ ideology_3 }}
-- Registered to vote, self-report pre-election: {{ registered_self_pre }}
+{% endif %}
 
-Survey-derived background facts:
+{% if memory_facts -%}
+{{ memory_section_title }}:
 {% for fact in memory_facts -%}
 - {{ fact }}
 {% endfor %}
+{% endif %}
 
 Election context:
 - Office: President
@@ -133,6 +136,44 @@ TEMPLATES = {
     "party_ideology": PARTY_IDEOLOGY_TEMPLATE,
     "survey_memory": SURVEY_MEMORY_TEMPLATE,
     "ces_president_vote_v1": CES_PRESIDENT_VOTE_TEMPLATE,
+}
+
+CES_PROMPT_MODE_CONFIGS = {
+    "ces_demographic_only": {
+        "include_party_ideology": False,
+        "include_memory": False,
+        "fact_roles": [],
+        "memory_section_title": "Survey-derived background facts",
+    },
+    "ces_party_ideology": {
+        "include_party_ideology": True,
+        "include_memory": False,
+        "fact_roles": [],
+        "memory_section_title": "Survey-derived background facts",
+    },
+    "ces_survey_memory": {
+        "include_party_ideology": True,
+        "include_memory": True,
+        "fact_roles": ["safe_pre"],
+        "memory_section_title": "Strict pre-election survey-derived background facts",
+    },
+    "ces_poll_informed": {
+        "include_party_ideology": True,
+        "include_memory": True,
+        "fact_roles": ["safe_pre", "poll_prior"],
+        "memory_section_title": "Survey-derived background facts, including poll-prior facts",
+    },
+}
+
+CES_LLM_BASELINE_PROMPT_MODES = {
+    "ces_demographic_only_llm": "ces_demographic_only",
+    "ces_party_ideology_llm": "ces_party_ideology",
+    "ces_survey_memory_llm": "ces_survey_memory",
+    "ces_poll_informed_llm": "ces_poll_informed",
+    # Backward-compatible aliases used by early CES configs.
+    "demographic_only_llm": "ces_demographic_only",
+    "party_ideology_llm": "ces_party_ideology",
+    "survey_memory_llm": "ces_survey_memory",
 }
 
 
@@ -201,12 +242,20 @@ def ces_memory_facts_for_agent(
     *,
     memory_policy: str,
     max_facts: int,
+    fact_roles: list[str] | None = None,
 ) -> tuple[list[str], list[str]]:
     if memory_facts.empty:
         return [], []
     base_ces_id = str(agent.get("base_ces_id") or agent.get("source_respondent_id"))
     facts = memory_facts[memory_facts["ces_id"].astype(str) == base_ces_id]
     filtered = LeakageGuard().filter_facts(facts, question, memory_policy)
+    if fact_roles is not None:
+        allowed_roles = set(fact_roles)
+        if "fact_role" in filtered.columns:
+            roles = filtered["fact_role"].fillna("safe_pre").astype(str)
+            filtered = filtered[roles.isin(allowed_roles)]
+        elif "safe_pre" not in allowed_roles:
+            filtered = filtered.head(0)
     if "fact_priority" in filtered.columns:
         filtered = filtered.sort_values(["fact_priority", "source_variable"], ascending=[False, True])
     filtered = filtered.head(max_facts)
@@ -221,14 +270,22 @@ def build_ces_prompt(
     context: pd.DataFrame,
     memory_policy: str = "strict_pre_no_vote_v1",
     max_memory_facts: int = 24,
+    prompt_mode: str = "ces_survey_memory",
 ) -> tuple[str, list[str]]:
-    prompt_facts, fact_ids = ces_memory_facts_for_agent(
-        agent,
-        question,
-        memory_facts,
-        memory_policy=memory_policy,
-        max_facts=max_memory_facts,
-    )
+    if prompt_mode not in CES_PROMPT_MODE_CONFIGS:
+        raise ValueError(f"Unknown CES prompt mode: {prompt_mode}")
+    mode_cfg = CES_PROMPT_MODE_CONFIGS[prompt_mode]
+    prompt_facts: list[str] = []
+    fact_ids: list[str] = []
+    if mode_cfg["include_memory"]:
+        prompt_facts, fact_ids = ces_memory_facts_for_agent(
+            agent,
+            question,
+            memory_facts,
+            memory_policy=memory_policy,
+            max_facts=max_memory_facts,
+            fact_roles=list(mode_cfg["fact_roles"]),
+        )
     base_ces_id = str(agent.get("base_ces_id") or agent.get("source_respondent_id"))
     candidates = context[context["ces_id"].astype(str) == base_ces_id].to_dict("records")
     if not candidates:
@@ -243,11 +300,12 @@ def build_ces_prompt(
         gender=agent.get("gender") or "unknown",
         race_ethnicity=agent.get("race_ethnicity") or "unknown",
         education_binary=agent.get("education_binary") or "unknown",
+        include_party_ideology=bool(mode_cfg["include_party_ideology"]),
         party_id_3=agent.get("party_id_3") or "unknown",
         party_id_7=agent.get("party_id_7") or "unknown",
         ideology_3=agent.get("ideology_3") or "unknown",
-        registered_self_pre=agent.get("registered_self_pre") or "unknown",
         memory_facts=prompt_facts,
+        memory_section_title=mode_cfg["memory_section_title"],
         candidates=candidates,
     )
     return text, fact_ids

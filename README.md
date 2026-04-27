@@ -182,6 +182,21 @@ conda run -n jigsaw python -m election_sim.cli run-simulation \
 Policy reference data lives in
 `src/election_sim/reference/leakage_policies.json`.
 
+## CES LLM Baselines
+
+CES LLM baselines are separated by information condition:
+
+- `ces_demographic_only_llm`: state, age, gender, race/ethnicity, education.
+- `ces_party_ideology_llm`: demographics plus party ID and ideology.
+- `ces_survey_memory_llm`: demographics plus party/ideology and strict
+  pre-election memory facts.
+- `ces_poll_informed_llm`: demographics plus party/ideology, strict memory
+  facts, and `poll_prior` facts from poll-informed memory.
+
+Older names `demographic_only_llm`, `party_ideology_llm`, and
+`survey_memory_llm` remain accepted as aliases for compatibility, but new CES
+configs should use the `ces_*_llm` names.
+
 ## LLM Providers
 
 Default tests use `model.provider: mock`. Ollama uses `/api/chat` with JSON
