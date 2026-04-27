@@ -1,0 +1,30 @@
+name: mit_president_returns
+schema_version: mit_president_returns_v1
+
+inputs:
+  county:
+    config: configs/datasets/mit_countypres_2000_2024.yaml
+  state:
+    config: configs/datasets/mit_president_state_1976_2024.yaml
+
+crosswalks:
+  candidate: configs/crosswalks/mit_president_candidate_crosswalk.yaml
+
+validation_reference: data/raw/mit/2024-better-evaluation.csv
+
+outputs:
+  out_dir: data/processed/mit
+  county_returns: election_returns_county_2000_2024.parquet
+  state_returns: election_returns_state_1976_2024.parquet
+  state_truth: president_state_truth.parquet
+  county_truth: president_county_truth.parquet
+  historical_features: president_historical_features.parquet
+  audit: mit_ingest_audit.parquet
+  report: mit_ingest_report.md
+
+truth_policy:
+  state_truth:
+    "2024": county_rollup
+    "1976-2020": state_file
+  county_truth:
+    "2000-2024": county_file

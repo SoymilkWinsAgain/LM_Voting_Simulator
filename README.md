@@ -1,72 +1,65 @@
 # LM Voting Simulator
 
-MVP implementation for a synthetic election simulation pipeline.
+This repository builds auditable large-language-model and baseline simulations
+for U.S. election behavior. The current research mainline is the 2024 CES
+respondent-level presidential turnout + vote pipeline with MIT Election Lab
+aggregate evaluation.
 
-The first supported target is a fixture-backed end-to-end run:
-
-```bash
-conda run -n jigsaw python -m election_sim.cli run-simulation \
-  --run-config configs/runs/first_e2e_2024_pa_fixture.yaml
-```
-
-Expected outputs are written under:
+The system is intentionally file-based:
 
 ```text
-data/runs/first_e2e_2024_pa_fixture/
+raw ANES/CES/MIT files
+-> processed parquet artifacts
+-> leakage-controlled survey memory
+-> respondent agents
+-> LLM and non-LLM predictions
+-> individual/subgroup metrics
+-> turnout-aware state aggregation
+-> MIT official-result comparison
+-> Markdown reports
 ```
 
-Useful commands:
+Real raw data and generated outputs are local only and are ignored by Git.
+
+## Setup
+
+Use the shared `jigsaw` environment for all Python commands:
 
 ```bash
-conda run -n jigsaw python -m election_sim.cli validate-config \
-  --config configs/runs/first_e2e_2024_pa_fixture.yaml
-
+conda run -n jigsaw python --version
 conda run -n jigsaw python -m pytest
 ```
 
-Real ANES 2024 one-agent smoke run:
+The package uses a `src/` layout plus a repository-local import shim, so CLI
+commands work from a fresh checkout without an editable install:
 
 ```bash
-conda run -n jigsaw python -m election_sim.cli build-anes \
-  --config configs/datasets/anes_2024_real_min.yaml \
-  --profile-crosswalk configs/crosswalks/anes_2024_real_min_profile.yaml \
-  --question-crosswalk configs/crosswalks/anes_2024_real_min_questions.yaml \
-  --out data/processed/anes/2024_real_min
-
-conda run -n jigsaw python -m election_sim.cli build-anes-memory \
-  --respondents data/processed/anes/2024_real_min/anes_respondents.parquet \
-  --answers data/processed/anes/2024_real_min/anes_answers.parquet \
-  --fact-templates configs/fact_templates/anes_2024_real_min_facts.yaml \
-  --policy safe_survey_memory_v1 \
-  --out data/processed/anes/2024_real_min \
-  --max-facts 6
-
-conda run -n jigsaw python -m election_sim.cli run-simulation \
-  --run-config configs/runs/real_anes_2024_one_agent_ollama.yaml
+conda run -n jigsaw python -m election_sim.cli --help
 ```
 
-The real ANES prompt and model response are written to:
+## Raw Data
 
-```text
-data/runs/real_anes_2024_one_agent_ollama/prompt_preview.md
-```
-
-## CES 2024 respondent-level mainline
-
-Place the local CES files under:
+Place source files under `data/raw/...`:
 
 ```text
 data/raw/ces/CES_2024.csv
 data/raw/ces/CCES24_Common_pre.docx
 data/raw/ces/CCES24_Common_post.docx
 data/raw/ces/CES_2024_GUIDE_vv.pdf
+
+data/raw/mit/countypres_2000-2024.csv
+data/raw/mit/1976-2024-president.csv
+data/raw/mit/2024-better-evaluation.csv
+
+data/raw/anes/2024/anes_2024.csv
 ```
 
-The runtime pipeline reads the static YAML mappings in `configs/`; it does not
-parse DOCX/PDF manuals during a run. If your raw CSV has a different name,
-change `configs/datasets/ces_2024_real_vv.yaml`.
+Runtime pipelines read static YAML mappings in `configs/`; DOCX/PDF manuals are
+reference inputs for humans, not parsed during normal runs.
 
-Build processed CES artifacts:
+## Main CES + MIT Pipeline
+
+Build CES respondent artifacts:
 
 ```bash
 conda run -n jigsaw python -m election_sim.cli build-ces \
@@ -90,28 +83,14 @@ conda run -n jigsaw python -m election_sim.cli build-ces-memory \
   --max-facts 24
 ```
 
-Run the deterministic CES smoke:
+Build MIT official truth:
 
 ```bash
-conda run -n jigsaw python -m election_sim.cli run-simulation \
-  --run-config configs/runs/ces_2024_president_smoke.yaml
+conda run -n jigsaw python -m election_sim.cli build-mit-president \
+  --config configs/datasets/mit_president_returns.yaml
 ```
 
-Expected smoke outputs:
-
-```text
-data/runs/ces_2024_president_smoke/
-  agents.parquet
-  prompts.parquet
-  prompt_preview.md
-  responses.parquet
-  individual_eval_metrics.parquet
-  aggregate_state_results.parquet
-  aggregate_eval_metrics.parquet
-  eval_report.md
-```
-
-For swing-state experiments, build strict memory once as above, then run:
+Run the seven-state strict pre-election experiment:
 
 ```bash
 conda run -n jigsaw python -m election_sim.cli run-simulation \
@@ -133,33 +112,91 @@ conda run -n jigsaw python -m election_sim.cli run-simulation \
   --run-config configs/runs/ces_2024_president_swing_poll_informed.yaml
 ```
 
-Leakage policies:
+Expected run outputs:
+
+```text
+data/runs/<run_id>/
+  agents.parquet
+  prompts.parquet
+  prompt_preview.md
+  responses.parquet
+  individual_eval_metrics.parquet
+  aggregate_state_results.parquet
+  aggregate_eval_metrics.parquet
+  eval_report.md
+```
+
+## Smoke Runs
+
+Fixture end-to-end run:
+
+```bash
+conda run -n jigsaw python -m election_sim.cli run-simulation \
+  --run-config configs/runs/first_e2e_2024_pa_fixture.yaml
+```
+
+Deterministic CES smoke:
+
+```bash
+conda run -n jigsaw python -m election_sim.cli run-simulation \
+  --run-config configs/runs/ces_2024_president_smoke.yaml
+```
+
+Tiny real-model CES smoke using local Ollama `qwen3.5:0.8b`:
+
+```bash
+conda run -n jigsaw python -m election_sim.cli run-simulation \
+  --run-config configs/runs/ces_2024_president_qwen08b_3_agent.yaml
+```
+
+Real ANES 2024 one-agent smoke:
+
+```bash
+conda run -n jigsaw python -m election_sim.cli build-anes \
+  --config configs/datasets/anes_2024_real_min.yaml \
+  --profile-crosswalk configs/crosswalks/anes_2024_real_min_profile.yaml \
+  --question-crosswalk configs/crosswalks/anes_2024_real_min_questions.yaml \
+  --out data/processed/anes/2024_real_min
+
+conda run -n jigsaw python -m election_sim.cli build-anes-memory \
+  --respondents data/processed/anes/2024_real_min/anes_respondents.parquet \
+  --answers data/processed/anes/2024_real_min/anes_answers.parquet \
+  --fact-templates configs/fact_templates/anes_2024_real_min_facts.yaml \
+  --policy safe_survey_memory_v1 \
+  --out data/processed/anes/2024_real_min \
+  --max-facts 6
+
+conda run -n jigsaw python -m election_sim.cli run-simulation \
+  --run-config configs/runs/real_anes_2024_one_agent_ollama.yaml
+```
+
+## Leakage Policies
 
 - `strict_pre_no_vote_v1`: excludes post-election turnout/vote, all `TS_*`
   validation fields, and direct pre-election vote intention/preference.
 - `poll_informed_pre_v1`: still excludes post-election and TargetSmart fields,
   but allows direct pre-election turnout/vote intention as `poll_prior`.
-- `post_hoc_explanation_v1`: explanatory-only; report marks it as not a formal
+- `post_hoc_explanation_v1`: explanatory-only; reports mark it as not a formal
   prediction policy.
 
-CES configs use `weight_common_post` by default because post-election labels are
-used for evaluation. If a row has a missing or invalid weight, the agent table
-records `weight_missing_reason` and falls back to weight `1.0`.
+Policy reference data lives in
+`src/election_sim/reference/leakage_policies.json`.
 
-The default fixture run uses `model.provider: mock` so tests stay deterministic.
-Ollama uses the native `/api/chat` endpoint so Qwen thinking can be disabled
-and JSON output stays parseable. To run against Windows Ollama from WSL, set
-the run config model block to:
+## LLM Providers
+
+Default tests use `model.provider: mock`. Ollama uses `/api/chat` with JSON
+format and `think: false`:
 
 ```yaml
 model:
   provider: ollama
   base_url: http://172.26.48.1:11434
-  model_name: qwen3.5:9b-q4_K_M
+  model_name: qwen3.5:0.8b
   temperature: 0.0
+  response_format: json
 ```
 
-For DeepSeek or another OpenAI-compatible endpoint:
+OpenAI-compatible endpoints use:
 
 ```yaml
 model:
@@ -169,16 +206,17 @@ model:
   model_name: deepseek-chat
 ```
 
-This repository intentionally does not include real ANES/CES/MIT data.
-Place real source files under `data/raw/...` and point the YAML configs to
-those files.
+## Documentation
 
-Known limitations:
+Start with [documents/developer_guide.md](documents/developer_guide.md) for the
+module map, pipeline contracts, full-chain test plan, and safe modification
+guidance.
 
-- The default aggregate MIT comparison uses a 7-state fixture until a real MIT
-  official CSV is supplied and referenced by config.
-- The default swing configs use `100` CES respondents per state for fast smoke
-  validation, not final research-scale estimates.
-- Mock provider runs are deterministic contract tests; real LLM providers may
-  produce parse failures, which are preserved in `responses.parquet` and
-  summarized in `eval_report.md`.
+## Known Limitations
+
+- CES aggregate evaluation is state-level. County MIT truth and historical
+  features are generated for future county-aware simulation.
+- Default swing configs use `100` respondents per state for fast validation,
+  not final research-scale estimates.
+- Real LLM providers may produce invalid JSON or malformed probabilities; raw
+  responses and parse status are preserved in `responses.parquet` and reports.

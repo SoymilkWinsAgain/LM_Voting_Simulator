@@ -12,6 +12,7 @@ from .ces import build_ces_cells as build_ces_cells_pipeline
 from .ces import build_ces_memory_cards as build_ces_memory_pipeline
 from .config import load_run_config
 from .mit import build_mit_results as build_mit_results_pipeline
+from .mit import write_mit_processed_artifacts
 from .population import build_agents as build_agents_pipeline
 from .simulation import evaluate_run, run_simulation
 
@@ -105,6 +106,13 @@ def build_mit_results(
 ) -> None:
     path = build_mit_results_pipeline(config, year, out)
     typer.echo(f"mit_results: {path}")
+
+
+@app.command("build-mit-president")
+def build_mit_president(config: Path = typer.Option(..., "--config")) -> None:
+    paths = write_mit_processed_artifacts(config)
+    for name, path in paths.items():
+        typer.echo(f"{name}: {path}")
 
 
 @app.command("build-agents")

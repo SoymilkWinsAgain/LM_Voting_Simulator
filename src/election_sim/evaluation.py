@@ -374,7 +374,19 @@ def write_individual_turnout_vote_metrics(
 
 def turnout_vote_election_metrics(aggregate: pd.DataFrame, mit_results: pd.DataFrame, run_id: str) -> pd.DataFrame:
     truth = state_truth_table(mit_results)
-    merged = aggregate.merge(truth[["state_po", "true_dem_2p", "true_margin", "true_winner"]], on="state_po")
+    merged = aggregate.merge(
+        truth[
+            [
+                "state_po",
+                "true_dem_votes",
+                "true_rep_votes",
+                "true_dem_2p",
+                "true_margin",
+                "true_winner",
+            ]
+        ],
+        on="state_po",
+    )
     rows: list[dict[str, object]] = []
     group_cols = ["baseline"] + (["model_name"] if "model_name" in merged.columns else [])
     for keys, group in merged.groupby(group_cols, dropna=False):
@@ -385,8 +397,16 @@ def turnout_vote_election_metrics(aggregate: pd.DataFrame, mit_results: pd.DataF
         dem_error = group["dem_share_2p"] - group["true_dem_2p"]
         margin_error = group["margin_2p"] - group["true_margin"]
         winner_correct = group["winner"] == group["true_winner"]
+        pred_dem = group["expected_dem_votes"].sum() if "expected_dem_votes" in group.columns else 0.0
+        pred_rep = group["expected_rep_votes"].sum() if "expected_rep_votes" in group.columns else 0.0
+        true_dem = group["true_dem_votes"].sum()
+        true_rep = group["true_rep_votes"].sum()
+        pred_national_dem_2p = pred_dem / (pred_dem + pred_rep) if (pred_dem + pred_rep) else np.nan
+        true_national_dem_2p = true_dem / (true_dem + true_rep) if (true_dem + true_rep) else np.nan
         for metric_name, metric_value in {
+            "dem_2p_rmse": float(np.sqrt((dem_error**2).mean())),
             "state_dem_2p_rmse": float(np.sqrt((dem_error**2).mean())),
+            "margin_mae": float(margin_error.abs().mean()),
             "state_margin_mae": float(margin_error.abs().mean()),
             "winner_accuracy": float(winner_correct.mean()),
         }.items():
@@ -401,6 +421,17 @@ def turnout_vote_election_metrics(aggregate: pd.DataFrame, mit_results: pd.DataF
                     n=int(len(group)),
                 )
             )
+        rows.append(
+            _metric_row(
+                run_id=run_id,
+                baseline=baseline,
+                model_name=model_name,
+                metric_scope="election_national",
+                metric_name="national_dem_2p_error",
+                metric_value=float(pred_national_dem_2p - true_national_dem_2p),
+                n=int(len(group)),
+            )
+        )
         for _, row in group.iterrows():
             rows.extend(
                 [

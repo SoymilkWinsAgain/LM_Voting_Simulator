@@ -25,6 +25,13 @@ def _markdown_table(df: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
+def _table_for(df: pd.DataFrame, columns: list[str], *, head: int | None = None) -> str:
+    selected = df[[col for col in columns if col in df.columns]]
+    if head is not None:
+        selected = selected.head(head)
+    return _markdown_table(selected)
+
+
 def write_eval_report(
     *,
     run_id: str,
@@ -187,6 +194,7 @@ def write_ces_eval_report(
     weight_column: str,
     leakage_audit: pd.DataFrame | None = None,
     mit_results: pd.DataFrame | None = None,
+    mit_audit: pd.DataFrame | None = None,
     dataset_artifacts: dict[str, str] | None = None,
     population_source: str = "ces_rows",
 ) -> Path:
@@ -217,12 +225,17 @@ def write_ces_eval_report(
         [
             individual_core[individual_core["metric_name"].isin(["turnout_brier", "vote_accuracy", "vote_log_loss"])],
             aggregate_metrics[
-                aggregate_metrics["metric_name"].isin(["state_dem_2p_rmse", "state_margin_mae", "winner_accuracy"])
+                aggregate_metrics["metric_name"].isin(
+                    ["dem_2p_rmse", "margin_mae", "state_dem_2p_rmse", "state_margin_mae", "winner_accuracy"]
+                )
             ],
         ],
         ignore_index=True,
     )
     state_comparison = aggregate.copy()
+    mit_truth_summary = pd.DataFrame()
+    mit_mode_summary = pd.DataFrame()
+    mit_audit_summary = pd.DataFrame()
     if mit_results is not None and not mit_results.empty and not aggregate.empty:
         truth = state_truth_table(mit_results)
         state_comparison = aggregate.merge(
@@ -232,6 +245,33 @@ def write_ces_eval_report(
         )
         state_comparison["dem_2p_error"] = state_comparison["dem_share_2p"] - state_comparison["true_dem_2p"]
         state_comparison["margin_error"] = state_comparison["margin_2p"] - state_comparison["true_margin"]
+        mit_truth_summary = pd.DataFrame(
+            [
+                {
+                    "truth_year": ",".join(str(year) for year in sorted(truth["year"].dropna().unique())),
+                    "truth_geo_level": "state",
+                    "states_evaluated": int(state_comparison["state_po"].nunique()),
+                    "truth_source": ",".join(
+                        sorted(str(value) for value in mit_results.get("truth_source", pd.Series(dtype=str)).dropna().unique())
+                    ),
+                    "source_version": ",".join(
+                        sorted(str(value) for value in mit_results.get("source_version", pd.Series(dtype=str)).dropna().unique())
+                    ),
+                    "candidate_crosswalk_version": "mit_president_candidate_crosswalk_v1",
+                }
+            ]
+        )
+    if mit_audit is not None and not mit_audit.empty:
+        mit_audit_summary = mit_audit.groupby(["audit_type", "severity"], dropna=False)["count"].sum().reset_index()
+        mit_mode_summary = mit_audit[mit_audit["audit_type"] == "mode_policy_summary"].copy()
+        if not mit_mode_summary.empty:
+            mit_mode_summary["mode_policy_used"] = mit_mode_summary["details"].str.replace("mode_policy=", "", regex=False)
+            mit_mode_summary = (
+                mit_mode_summary.groupby(["year", "state_po", "mode_policy_used"], dropna=False)["count"]
+                .sum()
+                .reset_index()
+                .head(80)
+            )
     parse_failures = responses[responses["parse_status"] != "ok"][
         ["agent_id", "baseline", "model_name", "parse_status", "raw_response"]
     ].head(20)
@@ -271,67 +311,58 @@ def write_ces_eval_report(
         _markdown_table(parse_failures),
         "",
         "## Individual metrics",
-        _markdown_table(individual_core[[col for col in metric_cols if col in individual_core.columns]]),
+        _table_for(individual_core, metric_cols),
         "",
         "## Subgroup metrics",
-        _markdown_table(
-            subgroup_metrics[
-                [
-                    col
-                    for col in [*metric_cols, "group_key", "n", "small_n"]
-                    if col in subgroup_metrics.columns
-                ]
-            ].head(120)
-        ),
+        _table_for(subgroup_metrics, [*metric_cols, "group_key", "n", "small_n"], head=120),
         "",
         "## Baseline comparison",
-        _markdown_table(baseline_comparison[[col for col in comparison_cols if col in baseline_comparison.columns]]),
+        _table_for(baseline_comparison, comparison_cols),
         "",
         "## Aggregate state results",
-        _markdown_table(
-            aggregate[
-                [
-                    col
-                    for col in [
-                        "state_po",
-                        "baseline",
-                        "n_agents",
-                        "expected_turnout",
-                        "dem_share_2p",
-                        "rep_share_2p",
-                        "margin_2p",
-                        "winner",
-                    ]
-                    if col in aggregate.columns
-                ]
-            ]
+        _table_for(
+            aggregate,
+            [
+                "state_po",
+                "baseline",
+                "n_agents",
+                "expected_turnout",
+                "dem_share_2p",
+                "rep_share_2p",
+                "margin_2p",
+                "winner",
+            ],
         ),
         "",
         "## Aggregate metrics",
-        _markdown_table(aggregate_metrics[[col for col in metric_cols if col in aggregate_metrics.columns]]),
+        _table_for(aggregate_metrics, metric_cols),
         "",
         "## MIT official comparison",
-        _markdown_table(
-            state_comparison[
-                [
-                    col
-                    for col in [
-                        "state_po",
-                        "baseline",
-                        "model_name",
-                        "dem_share_2p",
-                        "true_dem_2p",
-                        "dem_2p_error",
-                        "margin_2p",
-                        "true_margin",
-                        "margin_error",
-                        "winner",
-                        "true_winner",
-                    ]
-                    if col in state_comparison.columns
-                ]
-            ]
+        _table_for(
+            state_comparison,
+            [
+                "state_po",
+                "baseline",
+                "model_name",
+                "dem_share_2p",
+                "true_dem_2p",
+                "dem_2p_error",
+                "margin_2p",
+                "true_margin",
+                "margin_error",
+                "winner",
+                "true_winner",
+            ],
         ),
+        "",
+        "## MIT truth source",
+        _markdown_table(mit_truth_summary),
+        "",
+        "## MIT mode policy summary",
+        _markdown_table(mit_mode_summary),
+        "",
+        "## MIT audit flags",
+        _markdown_table(mit_audit_summary),
         "",
         "## Leakage audit summary",
         _markdown_table(leakage_summary),
@@ -340,23 +371,16 @@ def write_ces_eval_report(
         _markdown_table(poll_prior_summary),
         "",
         "## Leakage diagnostics",
-        _markdown_table(
-            leakage_table[
-                [
-                    col
-                    for col in [
-                        "source_variable",
-                        "policy",
-                        "excluded",
-                        "reason",
-                        "fact_role",
-                        "potential_leakage_warning",
-                    ]
-                    if col in leakage_table.columns
-                ]
-            ]
-            if not leakage_table.empty
-            else leakage_table
+        _table_for(
+            leakage_table,
+            [
+                "source_variable",
+                "policy",
+                "excluded",
+                "reason",
+                "fact_role",
+                "potential_leakage_warning",
+            ],
         ),
         "",
         "## TargetSmart / validation use",
@@ -367,7 +391,8 @@ def write_ces_eval_report(
         "See `prompt_preview.md` in this run directory.",
         "",
         "## Known limitations",
-        "Phase 1 smoke uses a small respondent sample and mock provider by default; aggregate metrics against MIT are not required unless configured separately.",
+        "Small smoke runs are intended to validate contracts and data flow, not to estimate final election performance. "
+        "Aggregate MIT metrics are only formal when aggregate evaluation is enabled and a truth table is configured.",
         "",
     ]
     out = run_dir / "eval_report.md"

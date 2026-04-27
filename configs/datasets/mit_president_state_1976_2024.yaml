@@ -1,0 +1,21 @@
+name: mit_president_state_1976_2024
+path: data/raw/mit/1976-2024-president.csv
+format: csv
+office: president
+geo_level: state
+schema_version: mit_state_president_v1
+
+columns:
+  year: year
+  state: state
+  state_po: state_po
+  state_fips: state_fips
+  office: office
+  candidate: candidate
+  party_detailed: party_detailed
+  party_simplified: party_simplified
+  writein: writein
+  candidatevotes: candidatevotes
+  totalvotes: totalvotes
+  version: version
+  notes: notes

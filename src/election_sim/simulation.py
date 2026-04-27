@@ -53,6 +53,25 @@ def _max_memory_facts(cfg: RunConfig) -> int:
     return int(memory_cfg.get("max_memory_facts", memory_cfg.get("max_facts", 24)))
 
 
+def _load_ces_aggregate_truth(cfg: RunConfig, aggregate_cfg: dict[str, Any]) -> pd.DataFrame | None:
+    truth_path = aggregate_cfg.get("truth_path") or cfg.paths.get("mit_state_truth")
+    truth_year = int(aggregate_cfg.get("year", aggregate_cfg.get("mit_results_year", cfg.scenario.year)))
+    geo_level = aggregate_cfg.get("geo_level", "state")
+    if truth_path:
+        truth = pd.read_parquet(truth_path)
+    elif cfg.paths.get("mit_results"):
+        truth = pd.read_parquet(cfg.paths["mit_results"])
+    elif cfg.paths.get("mit_config"):
+        truth = normalize_mit_results(cfg.paths["mit_config"], truth_year)
+    else:
+        return None
+    if "year" in truth.columns:
+        truth = truth[truth["year"] == truth_year].copy()
+    if "geo_level" in truth.columns:
+        truth = truth[truth["geo_level"] == geo_level].copy()
+    return truth
+
+
 def _question_bank_path(cfg: RunConfig, default_path: Path) -> Path:
     return _path(cfg, "question_set") if "question_set" in cfg.paths else default_path
 
@@ -575,13 +594,7 @@ def run_ces_election_simulation(run_config_path: str | Path) -> dict[str, Path]:
     mit_results = None
     aggregate_cfg = cfg.evaluation.get("aggregate", {})
     if aggregate_cfg.get("enabled", False) and memory_policy != "post_hoc_explanation_v1":
-        if cfg.paths.get("mit_results"):
-            mit_results = pd.read_parquet(cfg.paths["mit_results"])
-        elif cfg.paths.get("mit_config"):
-            mit_results = normalize_mit_results(
-                cfg.paths["mit_config"],
-                int(aggregate_cfg.get("mit_results_year", cfg.scenario.year)),
-            )
+        mit_results = _load_ces_aggregate_truth(cfg, aggregate_cfg)
         if mit_results is not None:
             aggregate_metrics = write_turnout_vote_election_metrics(
                 aggregate,
@@ -613,6 +626,9 @@ def run_ces_election_simulation(run_config_path: str | Path) -> dict[str, Path]:
     audit_path = cfg.paths.get("ces_leakage_audit")
     if audit_path:
         leakage_audit = pd.read_parquet(audit_path)
+    mit_audit = None
+    if cfg.paths.get("mit_audit"):
+        mit_audit = pd.read_parquet(cfg.paths["mit_audit"])
     weight_column = agents["weight_column"].dropna().astype(str).iloc[0] if agents["weight_column"].notna().any() else ""
     report = write_ces_eval_report(
         run_id=cfg.run_id,
@@ -627,6 +643,7 @@ def run_ces_election_simulation(run_config_path: str | Path) -> dict[str, Path]:
         weight_column=weight_column,
         leakage_audit=leakage_audit,
         mit_results=mit_results,
+        mit_audit=mit_audit,
         dataset_artifacts={key: str(value) for key, value in cfg.paths.items() if key != "run_dir"},
         population_source=cfg.population.source,
     )

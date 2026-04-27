@@ -8,36 +8,19 @@ from typing import Any
 import pandas as pd
 
 from .io import load_yaml, write_table
+from .reference_data import leakage_policy_reference
 from .transforms import clean_string
 
 
-TARGET_POST_VARIABLES = {
-    "CC24_401",
-    "CC24_410",
-    "CC24_410_NV",
-}
-
-TARGETSMART_PREFIXES = ("TS_",)
-
-POST_TARGET_PREFIXES = (
-    "CC24_40",
-    "CC24_41",
+_LEAKAGE_POLICY_REFERENCE = leakage_policy_reference()
+TARGET_POST_VARIABLES = {str(var).upper() for var in _LEAKAGE_POLICY_REFERENCE["target_post_variables"]}
+TARGETSMART_PREFIXES = tuple(str(prefix).upper() for prefix in _LEAKAGE_POLICY_REFERENCE["targetsmart_prefixes"])
+POST_TARGET_PREFIXES = tuple(str(prefix).upper() for prefix in _LEAKAGE_POLICY_REFERENCE["post_target_prefixes"])
+DIRECT_PRE_VOTE_PREFIXES = tuple(
+    str(prefix).upper() for prefix in _LEAKAGE_POLICY_REFERENCE["direct_pre_vote_prefixes"]
 )
-
-DIRECT_PRE_VOTE_PREFIXES = (
-    "CC24_363",
-    "CC24_364",
-    "CC24_365",
-    "CC24_366",
-    "CC24_367",
-)
-
-SUPPORTED_MEMORY_POLICIES = {
-    "strict_pre_no_vote_v1",
-    "poll_informed_pre_v1",
-    "post_hoc_explanation_v1",
-    "safe_survey_memory_v1",
-}
+AUDIT_PROBE_VARIABLES = tuple(str(var) for var in _LEAKAGE_POLICY_REFERENCE["audit_probe_variables"])
+SUPPORTED_MEMORY_POLICIES = set(_LEAKAGE_POLICY_REFERENCE["supported_memory_policies"])
 
 
 def is_targetsmart_variable(source_variable: Any) -> bool:
@@ -73,6 +56,7 @@ def leakage_reason(source_variable: Any, policy: str) -> str | None:
     if policy == "strict_pre_no_vote_v1" and is_direct_pre_vote_variable(source_variable):
         return "strict_policy_blocks_direct_pre_vote_intention"
     return None
+
 
 def is_leakage_variable(source_variable: Any, policy: str) -> bool:
     """Return whether a source variable is blocked by a memory policy."""
@@ -385,17 +369,7 @@ def build_leakage_audit(
                 ),
             }
         )
-    for source_var in [
-        "CC24_401",
-        "CC24_410",
-        "CC24_410_nv",
-        "TS_g2024",
-        "TS_voterstatus",
-        "TS_partyreg",
-        "CC24_363",
-        "CC24_364a",
-        "CC24_365",
-    ]:
+    for source_var in AUDIT_PROBE_VARIABLES:
         if source_var not in {row["source_variable"] for row in rows}:
             reason = leakage_reason(source_var, policy)
             excluded = reason is not None or source_var not in templated_vars

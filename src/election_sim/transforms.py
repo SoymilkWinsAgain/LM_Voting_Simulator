@@ -6,6 +6,8 @@ import hashlib
 import math
 from typing import Any
 
+from .reference_data import STATE_FIPS_TO_PO
+
 
 MISSING_VALUES = {
     "",
@@ -24,61 +26,6 @@ MISSING_VALUES = {
     "-2",
     "-1",
 }
-
-STATE_FIPS_TO_PO = {
-    "1": "AL",
-    "2": "AK",
-    "4": "AZ",
-    "5": "AR",
-    "6": "CA",
-    "8": "CO",
-    "9": "CT",
-    "10": "DE",
-    "11": "DC",
-    "12": "FL",
-    "13": "GA",
-    "15": "HI",
-    "16": "ID",
-    "17": "IL",
-    "18": "IN",
-    "19": "IA",
-    "20": "KS",
-    "21": "KY",
-    "22": "LA",
-    "23": "ME",
-    "24": "MD",
-    "25": "MA",
-    "26": "MI",
-    "27": "MN",
-    "28": "MS",
-    "29": "MO",
-    "30": "MT",
-    "31": "NE",
-    "32": "NV",
-    "33": "NH",
-    "34": "NJ",
-    "35": "NM",
-    "36": "NY",
-    "37": "NC",
-    "38": "ND",
-    "39": "OH",
-    "40": "OK",
-    "41": "OR",
-    "42": "PA",
-    "44": "RI",
-    "45": "SC",
-    "46": "SD",
-    "47": "TN",
-    "48": "TX",
-    "49": "UT",
-    "50": "VT",
-    "51": "VA",
-    "53": "WA",
-    "54": "WV",
-    "55": "WI",
-    "56": "WY",
-}
-
 
 def is_missing(value: Any) -> bool:
     if value is None:
@@ -171,7 +118,8 @@ def normalize_vote(value: Any) -> str:
 
 
 def state_fips_to_po(value: Any) -> str | None:
-    return STATE_FIPS_TO_PO.get(clean_string(value))
+    key = clean_string(value)
+    return STATE_FIPS_TO_PO.get(key) or STATE_FIPS_TO_PO.get(key.zfill(2))
 
 
 def birthyr_to_age(value: Any, year: int = 2024) -> int | None:

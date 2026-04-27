@@ -1,0 +1,38 @@
+{
+  "supported_memory_policies": [
+    "strict_pre_no_vote_v1",
+    "poll_informed_pre_v1",
+    "post_hoc_explanation_v1",
+    "safe_survey_memory_v1"
+  ],
+  "target_post_variables": [
+    "CC24_401",
+    "CC24_410",
+    "CC24_410_NV"
+  ],
+  "targetsmart_prefixes": [
+    "TS_"
+  ],
+  "post_target_prefixes": [
+    "CC24_40",
+    "CC24_41"
+  ],
+  "direct_pre_vote_prefixes": [
+    "CC24_363",
+    "CC24_364",
+    "CC24_365",
+    "CC24_366",
+    "CC24_367"
+  ],
+  "audit_probe_variables": [
+    "CC24_401",
+    "CC24_410",
+    "CC24_410_nv",
+    "TS_g2024",
+    "TS_voterstatus",
+    "TS_partyreg",
+    "CC24_363",
+    "CC24_364a",
+    "CC24_365"
+  ]
+}

@@ -1,0 +1,60 @@
+office: president
+schema_version: mit_president_candidate_crosswalk_v1
+
+candidate_crosswalk:
+  - year: 2000
+    candidate_norm: AL GORE
+    major_choice: democrat
+    candidate_patterns: [AL GORE, GORE AL, GORE, AL]
+  - year: 2000
+    candidate_norm: GEORGE W BUSH
+    major_choice: republican
+    candidate_patterns: [GEORGE W BUSH, BUSH GEORGE W, BUSH, GEORGE W]
+  - year: 2004
+    candidate_norm: JOHN F KERRY
+    major_choice: democrat
+    candidate_patterns: [JOHN F KERRY, JOHN KERRY, KERRY JOHN F, KERRY, JOHN]
+  - year: 2004
+    candidate_norm: GEORGE W BUSH
+    major_choice: republican
+    candidate_patterns: [GEORGE W BUSH, BUSH GEORGE W, BUSH, GEORGE W]
+  - year: 2008
+    candidate_norm: BARACK OBAMA
+    major_choice: democrat
+    candidate_patterns: [BARACK OBAMA, OBAMA BARACK H, OBAMA, BARACK H, OBAMA, BARACK]
+  - year: 2008
+    candidate_norm: JOHN MCCAIN
+    major_choice: republican
+    candidate_patterns: [JOHN MCCAIN, MCCAIN JOHN, MCCAIN, JOHN]
+  - year: 2012
+    candidate_norm: BARACK OBAMA
+    major_choice: democrat
+    candidate_patterns: [BARACK OBAMA, OBAMA BARACK H, OBAMA, BARACK H, OBAMA, BARACK]
+  - year: 2012
+    candidate_norm: MITT ROMNEY
+    major_choice: republican
+    candidate_patterns: [MITT ROMNEY, ROMNEY MITT, ROMNEY, MITT]
+  - year: 2016
+    candidate_norm: HILLARY CLINTON
+    major_choice: democrat
+    candidate_patterns: [HILLARY CLINTON, CLINTON HILLARY, CLINTON, HILLARY]
+  - year: 2016
+    candidate_norm: DONALD J TRUMP
+    major_choice: republican
+    candidate_patterns: [DONALD J TRUMP, DONALD TRUMP, TRUMP DONALD J, TRUMP, DONALD J, TRUMP, DONALD]
+  - year: 2020
+    candidate_norm: JOSEPH R BIDEN JR
+    major_choice: democrat
+    candidate_patterns: [JOSEPH R BIDEN JR, JOE BIDEN, BIDEN JOSEPH R JR, BIDEN, JOSEPH R JR, BIDEN, JOSEPH]
+  - year: 2020
+    candidate_norm: DONALD J TRUMP
+    major_choice: republican
+    candidate_patterns: [DONALD J TRUMP, DONALD TRUMP, TRUMP DONALD J, TRUMP, DONALD J, TRUMP, DONALD]
+  - year: 2024
+    candidate_norm: KAMALA D HARRIS
+    major_choice: democrat
+    candidate_patterns: [KAMALA D HARRIS, KAMALA HARRIS, HARRIS KAMALA D, HARRIS, KAMALA D, HARRIS, KAMALA]
+  - year: 2024
+    candidate_norm: DONALD J TRUMP
+    major_choice: republican
+    candidate_patterns: [DONALD J TRUMP, DONALD TRUMP, TRUMP DONALD J, TRUMP, DONALD J, TRUMP, DONALD]

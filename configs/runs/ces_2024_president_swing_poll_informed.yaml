@@ -58,7 +58,11 @@ evaluation:
     subgroups: [party_id, ideology, race_ethnicity, education, age_group, gender, state]
   aggregate:
     enabled: true
-    mit_results_year: 2024
+    truth: mit_president_state
+    truth_path: data/processed/mit/president_state_truth.parquet
+    year: 2024
+    geo_level: state
+    geo_cols: ["state_po"]
 
 paths:
   processed_dir: data/processed/ces/2024_common_vv_poll
@@ -71,4 +75,6 @@ paths:
   ces_memory_facts: data/processed/ces/2024_common_vv_poll/ces_memory_facts.parquet
   ces_leakage_audit: data/processed/ces/2024_common_vv_poll/ces_leakage_audit.parquet
   question_set: configs/questions/ces_2024_president_turnout_vote.yaml
-  mit_config: configs/datasets/mit_president_county_2024_swing_fixture.yaml
+  mit_state_truth: data/processed/mit/president_state_truth.parquet
+  mit_historical_features: data/processed/mit/president_historical_features.parquet
+  mit_audit: data/processed/mit/mit_ingest_audit.parquet

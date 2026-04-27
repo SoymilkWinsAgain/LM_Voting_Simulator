@@ -1,0 +1,36 @@
+name: mit_countypres_2000_2024
+path: data/raw/mit/countypres_2000-2024.csv
+format: csv
+office: president
+geo_level: county
+schema_version: mit_countypres_v1
+
+columns:
+  state: state
+  county_name: county_name
+  year: year
+  state_po: state_po
+  county_fips: county_fips
+  office: office
+  candidate: candidate
+  party: party
+  candidatevotes: candidatevotes
+  totalvotes: totalvotes
+  version: version
+  mode: mode
+
+mode_policy:
+  if_total_exists_use_total: true
+  otherwise_sum_modes: true
+  treat_null_mode_as_available_mode: true
+
+candidate_vote_policy:
+  major_party_missing: error
+  minor_party_missing: fill_zero_with_audit
+
+exclude_candidate_patterns:
+  - TOTAL VOTES CAST
+  - OVERVOTES
+  - UNDERVOTES
+  - SPOILED
+  - BLANK VOTES

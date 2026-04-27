@@ -14,10 +14,11 @@ from election_sim.config import RunConfig, load_cell_schema, load_run_config
 from election_sim.evaluation import election_metrics, individual_turnout_vote_metrics, turnout_vote_election_metrics
 from election_sim.gdelt import load_context_cards, select_context_cards
 from election_sim.io import load_yaml
-from election_sim.mit import normalize_mit_results, state_truth_table
+from election_sim.mit import normalize_mit_results, state_truth_table, write_mit_processed_artifacts
 from election_sim.population import build_agents_from_ces_rows, build_agents_from_frames
 from election_sim.prompts import build_prompt, parse_json_answer, parse_turnout_vote_json
 from election_sim.questions import load_question_config
+from election_sim.reference_data import STATE_FIPS_TO_PO, STATE_PO, SWING_STATES_2024, leakage_policy_reference
 from election_sim.simulation import run_simulation
 from election_sim.transforms import (
     age_to_group,
@@ -62,6 +63,7 @@ def test_category_mapping_helpers():
     assert anes_vote_choice_president(6) == "other"
     assert anes_vote_choice_president(-1) == "not_vote_or_unknown"
     assert state_fips_to_po(42) == "PA"
+    assert state_fips_to_po("01") == "AL"
     assert ces_gender4(3) == "non_binary"
     assert ces_education_binary(5) == "college_plus"
     assert ces_race_ethnicity(1, 2) == "white"
@@ -75,6 +77,17 @@ def test_category_mapping_helpers():
     assert ces_president_nonvoter_preference(9) == "undecided"
     assert ces_validated_turnout(6) == "voted"
     assert ces_validated_turnout(7) == "not_voted"
+
+
+def test_packaged_reference_data_contracts():
+    assert len(STATE_PO) == 51
+    assert STATE_FIPS_TO_PO["42"] == "PA"
+    assert STATE_FIPS_TO_PO["04"] == "AZ"
+    assert set(SWING_STATES_2024) == {"PA", "MI", "WI", "GA", "AZ", "NC", "NV"}
+    leakage = leakage_policy_reference()
+    assert "strict_pre_no_vote_v1" in leakage["supported_memory_policies"]
+    assert "CC24_410" in leakage["target_post_variables"]
+    assert "TS_" in leakage["targetsmart_prefixes"]
 
 
 def test_anes_profile_crosswalk_maps_categories_correctly(tmp_path):
@@ -485,6 +498,43 @@ def test_mit_candidate_party_aggregation():
     row = truth[truth["state_po"] == "PA"].iloc[0]
     assert row["true_winner"] == "democrat"
     assert abs(row["true_dem_2p"] - (510000 / 925000)) < 1e-12
+
+
+def test_real_mit_president_processing_outputs_truth_tables(tmp_path):
+    paths = write_mit_processed_artifacts("configs/datasets/mit_president_returns.yaml", tmp_path / "mit")
+    county_returns = pd.read_parquet(paths["county_returns"])
+    state_truth = pd.read_parquet(paths["state_truth"])
+    county_truth = pd.read_parquet(paths["county_truth"])
+    features = pd.read_parquet(paths["historical_features"])
+    audit = pd.read_parquet(paths["audit"])
+
+    assert set(county_returns["year"].unique()) == {2000, 2004, 2008, 2012, 2016, 2020, 2024}
+    assert county_returns["state_po"].nunique() == 51
+    assert county_returns["county_fips"].astype(str).str.len().eq(5).all()
+    assert {"total_row", "summed_modes", "single_mode"} & set(county_returns["mode_policy_used"])
+    assert not county_returns["candidate_norm"].isin(["TOTAL VOTES CAST", "OVERVOTES", "UNDERVOTES", "SPOILED"]).any()
+    assert {"administrative_row_excluded", "candidatevotes_missing_filled_zero", "county_fips_synthetic"} <= set(
+        audit["audit_type"]
+    )
+
+    state_2024 = state_truth[state_truth["year"] == 2024].copy()
+    assert len(state_2024) == 51
+    assert set(state_2024["truth_source"]) == {"mit_county_rollup"}
+    assert {"dem_votes", "rep_votes", "dem_share_2p", "margin_2p", "winner"} <= set(state_2024.columns)
+    ref = pd.read_csv("data/raw/mit/2024-better-evaluation.csv")
+    merged = state_2024.merge(ref, on="state_po", suffixes=("_truth", "_ref"))
+    assert len(merged) == 51
+    assert (merged["dem_votes_truth"] - merged["dem_votes_ref"]).abs().max() == 0
+    assert (merged["rep_votes_truth"] - merged["rep_votes_ref"]).abs().max() == 0
+    assert (merged["dem_share_2p_truth"] - merged["dem_share_2p_ref"]).abs().max() < 1e-10
+
+    county_2024 = county_truth[county_truth["year"] == 2024]
+    assert {"county_fips", "county_name", "margin_2p"} <= set(county_2024.columns)
+    assert features["year"].max() == 2020
+    truth_table = state_truth_table(state_2024)
+    assert {"true_dem_votes", "true_rep_votes", "true_dem_2p", "true_margin", "true_winner"} <= set(
+        truth_table.columns
+    )
 
 
 def test_prompt_builder_includes_allowed_facts_only():
