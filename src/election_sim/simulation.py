@@ -12,11 +12,17 @@ from .aggregation import write_aggregate_state_results, write_turnout_vote_state
 from .anes import build_anes, build_memory_cards
 from .baselines import LLMBaseline, build_baselines
 from .ces import build_ces_cells
+from .ces_baselines import build_ces_non_llm_baselines
 from .config import RunConfig, load_cell_schema, load_run_config
-from .evaluation import empty_aggregate_metrics, write_eval_metrics, write_individual_turnout_vote_metrics
+from .evaluation import (
+    empty_aggregate_metrics,
+    write_eval_metrics,
+    write_individual_turnout_vote_metrics,
+    write_turnout_vote_election_metrics,
+)
 from .io import ensure_dir, stable_json, write_table
 from .llm import build_llm_client
-from .mit import build_mit_results
+from .mit import build_mit_results, normalize_mit_results
 from .population import agent_response_id, build_agents_from_ces_rows, build_agents_from_frames
 from .prompts import build_ces_prompt, build_prompt, options_from_question, parse_json_answer, parse_turnout_vote_json
 from .questions import load_question_config
@@ -426,6 +432,7 @@ def _ces_response_record(
         "prompt_id": prompt_id,
         "agent_id": agent["agent_id"],
         "base_anes_id": None,
+        "source_respondent_id": agent.get("source_respondent_id"),
         "base_ces_id": agent["base_ces_id"],
         "question_id": question_id,
         "task_id": "president_turnout_vote",
@@ -454,6 +461,7 @@ def run_ces_election_simulation(run_config_path: str | Path) -> dict[str, Path]:
     cfg = load_run_config(run_config_path)
     run_dir = ensure_dir(cfg.run_dir)
     respondents = pd.read_parquet(_path(cfg, "ces_respondents"))
+    answers = pd.read_parquet(_path(cfg, "ces_answers"))
     targets = pd.read_parquet(_path(cfg, "ces_targets"))
     context = pd.read_parquet(_path(cfg, "ces_context"))
     memory_facts = pd.read_parquet(_path(cfg, "ces_memory_facts"))
@@ -468,32 +476,56 @@ def run_ces_election_simulation(run_config_path: str | Path) -> dict[str, Path]:
     llm_client = build_llm_client(cfg.model)
     model_name = getattr(llm_client, "model_name", cfg.model.model_name)
     baseline_names = cfg.baselines or ["survey_memory_llm"]
+    llm_baseline_names = [
+        name for name in baseline_names if name in {"survey_memory_llm", "demographic_only_llm", "party_ideology_llm"}
+    ]
+    non_llm_baselines = build_ces_non_llm_baselines(
+        [name for name in baseline_names if name not in set(llm_baseline_names)],
+        respondents=respondents,
+        answers=answers,
+        targets=targets,
+        agents=agents,
+    )
+    unknown_baselines = set(baseline_names) - set(llm_baseline_names) - set(non_llm_baselines)
+    if unknown_baselines:
+        raise ValueError(f"Unknown CES baseline(s): {sorted(unknown_baselines)}")
     memory_policy = _memory_policy(cfg)
     max_memory = _max_memory_facts(cfg)
     prompt_rows: list[dict[str, Any]] = []
     response_rows: list[dict[str, Any]] = []
     for baseline_name in baseline_names:
-        if baseline_name not in {"survey_memory_llm", "demographic_only_llm", "party_ideology_llm"}:
-            raise ValueError(f"CES smoke supports LLM baselines only, got {baseline_name}")
         for _, agent in agents.iterrows():
-            prompt_text, fact_ids = build_ces_prompt(
-                agent,
-                question,
-                memory_facts=memory_facts,
-                context=context,
-                memory_policy=memory_policy,
-                max_memory_facts=max_memory,
-            )
+            if baseline_name in llm_baseline_names:
+                prompt_text, fact_ids = build_ces_prompt(
+                    agent,
+                    question,
+                    memory_facts=memory_facts,
+                    context=context,
+                    memory_policy=memory_policy,
+                    max_memory_facts=max_memory,
+                )
+                raw = llm_client.complete(prompt_text, ["democrat", "republican", "other", "undecided", "not_vote"])
+                response_model_name = model_name
+            else:
+                baseline = non_llm_baselines[baseline_name]
+                prompt_text = (
+                    f"Non-LLM CES baseline `{baseline_name}` for `{question['question_id']}`. "
+                    f"Feature policy: `{getattr(baseline, 'feature_policy', 'unknown')}`. "
+                    f"Poll-informed: `{getattr(baseline, 'is_poll_informed', False)}`."
+                )
+                fact_ids = []
+                pred = baseline.predict(agent)
+                raw = pred.raw_response
+                response_model_name = pred.model_name
             prompt = _prompt_record(
                 cfg=cfg,
                 agent=agent,
                 question=question,
                 baseline=baseline_name,
-                model_name=model_name,
+                model_name=response_model_name,
                 prompt_text=prompt_text,
                 fact_ids=fact_ids,
             )
-            raw = llm_client.complete(prompt_text, ["democrat", "republican", "other", "undecided", "not_vote"])
             parsed = parse_turnout_vote_json(raw)
             prompt_rows.append(prompt)
             response_rows.append(
@@ -503,7 +535,7 @@ def run_ces_election_simulation(run_config_path: str | Path) -> dict[str, Path]:
                     agent=agent,
                     question_id=question["question_id"],
                     baseline=baseline_name,
-                    model_name=model_name,
+                    model_name=response_model_name,
                     raw_response=raw,
                     parsed=parsed,
                 )
@@ -524,6 +556,12 @@ def run_ces_election_simulation(run_config_path: str | Path) -> dict[str, Path]:
         run_dir / "individual_eval_metrics.parquet",
         turnout_target_id=individual_cfg.get("turnout_truth", "turnout_2024_self_report"),
         vote_target_id=individual_cfg.get("vote_truth", "president_vote_2024"),
+        agents=agents,
+        subgroup_columns=individual_cfg.get(
+            "subgroups",
+            ["party_id", "ideology", "race_ethnicity", "education", "age_group", "gender", "state"],
+        ),
+        small_n_threshold=int(individual_cfg.get("small_n_threshold", 30)),
     )
     aggregate = write_turnout_vote_state_results(
         responses,
@@ -533,9 +571,30 @@ def run_ces_election_simulation(run_config_path: str | Path) -> dict[str, Path]:
         run_dir / "aggregate_state_results.parquet",
         office=cfg.scenario.office,
     )
-    aggregate_metrics = empty_aggregate_metrics(cfg.run_id)
     aggregate_metrics_path = run_dir / "aggregate_eval_metrics.parquet"
-    write_table(aggregate_metrics, aggregate_metrics_path)
+    mit_results = None
+    aggregate_cfg = cfg.evaluation.get("aggregate", {})
+    if aggregate_cfg.get("enabled", False) and memory_policy != "post_hoc_explanation_v1":
+        if cfg.paths.get("mit_results"):
+            mit_results = pd.read_parquet(cfg.paths["mit_results"])
+        elif cfg.paths.get("mit_config"):
+            mit_results = normalize_mit_results(
+                cfg.paths["mit_config"],
+                int(aggregate_cfg.get("mit_results_year", cfg.scenario.year)),
+            )
+        if mit_results is not None:
+            aggregate_metrics = write_turnout_vote_election_metrics(
+                aggregate,
+                mit_results,
+                cfg.run_id,
+                aggregate_metrics_path,
+            )
+        else:
+            aggregate_metrics = empty_aggregate_metrics(cfg.run_id)
+            write_table(aggregate_metrics, aggregate_metrics_path)
+    else:
+        aggregate_metrics = empty_aggregate_metrics(cfg.run_id)
+        write_table(aggregate_metrics, aggregate_metrics_path)
 
     prompt_preview_path = _write_prompt_preview(
         run_dir=run_dir,
@@ -567,6 +626,9 @@ def run_ces_election_simulation(run_config_path: str | Path) -> dict[str, Path]:
         memory_policy=memory_policy,
         weight_column=weight_column,
         leakage_audit=leakage_audit,
+        mit_results=mit_results,
+        dataset_artifacts={key: str(value) for key, value in cfg.paths.items() if key != "run_dir"},
+        population_source=cfg.population.source,
     )
     return {
         "agents": agents_path,

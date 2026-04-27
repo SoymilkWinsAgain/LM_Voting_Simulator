@@ -7,9 +7,11 @@ import pandas as pd
 
 from election_sim.aggregation import aggregate_state_results, aggregate_turnout_vote_state_results
 from election_sim.anes import LeakageGuard, build_anes, build_memory_cards
+from election_sim.ces_baselines import build_ces_non_llm_baselines
+from election_sim.ces_schema import format_turnout_vote_response
 from election_sim.ces import build_ces, build_ces_cells, build_ces_memory_cards
 from election_sim.config import RunConfig, load_cell_schema, load_run_config
-from election_sim.evaluation import election_metrics
+from election_sim.evaluation import election_metrics, individual_turnout_vote_metrics, turnout_vote_election_metrics
 from election_sim.gdelt import load_context_cards, select_context_cards
 from election_sim.io import load_yaml
 from election_sim.mit import normalize_mit_results, state_truth_table
@@ -276,9 +278,10 @@ def test_ces_memory_policy_and_row_agents(tmp_path):
     facts = pd.read_parquet(memory_paths["facts"])
     cards = pd.read_parquet(memory_paths["cards"])
     audit = pd.read_parquet(memory_paths["audit"])
-    assert not {"CC24_401", "CC24_410", "TS_g2024"} & set(facts["source_variable"])
+    assert not {"CC24_401", "CC24_410", "TS_g2024", "CC24_363", "CC24_364a"} & set(facts["source_variable"])
     assert cards["n_facts"].max() <= 3
     assert audit[audit["source_variable"].isin(["CC24_401", "CC24_410", "TS_g2024"])]["excluded"].all()
+    assert audit[audit["source_variable"].isin(["TS_partyreg"])]["excluded"].all()
 
     cfg = RunConfig.model_validate(
         {
@@ -296,6 +299,34 @@ def test_ces_memory_policy_and_row_agents(tmp_path):
     assert len(agents) == 1
     assert agents.iloc[0]["base_ces_id"] in {"101", "102"}
     assert agents.iloc[0]["memory_card_id"]
+    assert "weight_missing_reason" in agents.columns
+
+
+def test_ces_poll_informed_policy_marks_poll_prior(tmp_path):
+    config_path = _write_tiny_ces_fixture(tmp_path)
+    paths = build_ces(
+        config_path,
+        "configs/crosswalks/ces_2024_profile.yaml",
+        "configs/crosswalks/ces_2024_pre_questions.yaml",
+        "configs/crosswalks/ces_2024_targets.yaml",
+        "configs/crosswalks/ces_2024_context.yaml",
+        tmp_path / "ces",
+    )
+    memory_paths = build_ces_memory_cards(
+        paths["respondents"],
+        paths["answers"],
+        "configs/fact_templates/ces_2024_common_facts.yaml",
+        "poll_informed_pre_v1",
+        tmp_path / "ces_poll",
+        max_facts=10,
+    )
+    facts = pd.read_parquet(memory_paths["facts"])
+    audit = pd.read_parquet(memory_paths["audit"])
+    poll_facts = facts[facts["source_variable"].isin(["CC24_363", "CC24_364a"])]
+    assert not poll_facts.empty
+    assert set(poll_facts["fact_role"]) == {"poll_prior"}
+    assert audit[audit["source_variable"].isin(["TS_g2024", "TS_partyreg"])]["excluded"].all()
+    assert not audit[audit["source_variable"].isin(["CC24_363", "CC24_364a"])]["excluded"].any()
 
 
 def test_turnout_vote_parser_and_aggregation():
@@ -312,6 +343,32 @@ def test_turnout_vote_parser_and_aggregation():
     assert parsed["parse_status"] == "ok"
     assert parsed["most_likely_choice"] == "democrat"
     assert parse_turnout_vote_json('{"answer": "democrat"}')["parse_status"] == "invalid_schema"
+    assert (
+        parse_turnout_vote_json(
+            json.dumps(
+                {
+                    "turnout_probability": 1.2,
+                    "vote_probabilities": {"democrat": 0.7, "republican": 0.2, "other": 0.05, "undecided": 0.05},
+                    "most_likely_choice": "democrat",
+                    "confidence": 0.9,
+                }
+            )
+        )["parse_status"]
+        == "invalid_probability"
+    )
+    assert (
+        parse_turnout_vote_json(
+            json.dumps(
+                {
+                    "turnout_probability": 0.8,
+                    "vote_probabilities": {"democrat": 0.7, "republican": 0.2, "other": 0.05, "undecided": 0.05},
+                    "most_likely_choice": "green",
+                    "confidence": 0.9,
+                }
+            )
+        )["parse_status"]
+        == "invalid_choice"
+    )
 
     agents = pd.DataFrame(
         [
@@ -348,6 +405,45 @@ def test_turnout_vote_parser_and_aggregation():
     assert abs(row["expected_dem_votes"] - 0.8) < 1e-12
     assert abs(row["expected_rep_votes"] - 1.2) < 1e-12
     assert abs(row["dem_share_2p"] - 0.4) < 1e-12
+
+
+def test_ces_non_llm_baselines_emit_canonical_schema(tmp_path):
+    config_path = _write_tiny_ces_fixture(tmp_path)
+    paths = build_ces(
+        config_path,
+        "configs/crosswalks/ces_2024_profile.yaml",
+        "configs/crosswalks/ces_2024_pre_questions.yaml",
+        "configs/crosswalks/ces_2024_targets.yaml",
+        "configs/crosswalks/ces_2024_context.yaml",
+        tmp_path / "ces",
+    )
+    respondents = pd.read_parquet(paths["respondents"])
+    answers = pd.read_parquet(paths["answers"])
+    targets = pd.read_parquet(paths["targets"])
+    cards = pd.DataFrame({"ces_id": respondents["ces_id"], "memory_card_id": ["m1", "m2"]})
+    cfg = RunConfig.model_validate(
+        {
+            "run_id": "tiny_ces",
+            "scenario": {"year": 2024, "office": "president", "states": ["PA"]},
+            "population": {
+                "source": "ces_rows",
+                "selection": {"states": ["PA"]},
+                "sampling": {"mode": "all_rows"},
+                "weight": {"column": "weight_common_post"},
+            },
+        }
+    )
+    agents = build_agents_from_ces_rows(cfg, respondents, cards)
+    baselines = build_ces_non_llm_baselines(
+        ["party_id_baseline", "sklearn_logit_pre_only", "sklearn_logit_poll_informed"],
+        respondents=respondents,
+        answers=answers,
+        targets=targets,
+        agents=agents.head(1),
+    )
+    for baseline in baselines.values():
+        parsed = parse_turnout_vote_json(baseline.predict(agents.iloc[0]).raw_response)
+        assert parsed["parse_status"] == "ok"
 
 
 def test_archetype_matcher_returns_required_count(tmp_path):
@@ -474,6 +570,81 @@ def test_vote_share_aggregation_and_election_rmse_metric():
     mit = normalize_mit_results("configs/datasets/mit_president_county_fixture.yaml", 2024)
     metrics = election_metrics(aggregate, mit, "r")
     assert {"winner_accuracy", "vote_share_rmse", "margin_mae"} <= set(metrics["metric_name"])
+
+
+def test_ces_individual_and_aggregate_metrics_include_diagnostics():
+    responses = pd.DataFrame(
+        [
+            {
+                "agent_id": "a1",
+                "base_ces_id": "101",
+                "baseline": "b",
+                "model_name": "m",
+                "parse_status": "ok",
+                "turnout_probability": 0.9,
+                "vote_prob_democrat": 0.8,
+                "vote_prob_republican": 0.1,
+                "vote_prob_other": 0.05,
+                "vote_prob_undecided": 0.05,
+                "most_likely_choice": "democrat",
+            },
+            {
+                "agent_id": "a2",
+                "base_ces_id": "102",
+                "baseline": "b",
+                "model_name": "m",
+                "parse_status": "ok",
+                "turnout_probability": 0.2,
+                "vote_prob_democrat": 0.2,
+                "vote_prob_republican": 0.7,
+                "vote_prob_other": 0.05,
+                "vote_prob_undecided": 0.05,
+                "most_likely_choice": "not_vote",
+            },
+        ]
+    )
+    targets = pd.DataFrame(
+        [
+            {"ces_id": "101", "target_id": "turnout_2024_self_report", "canonical_value": "voted"},
+            {"ces_id": "101", "target_id": "president_vote_2024", "canonical_value": "democrat"},
+            {"ces_id": "102", "target_id": "turnout_2024_self_report", "canonical_value": "not_voted"},
+            {"ces_id": "102", "target_id": "president_vote_2024", "canonical_value": "not_vote"},
+        ]
+    )
+    agents = pd.DataFrame(
+        [
+            {"agent_id": "a1", "party_id_3": "democrat", "state_po": "PA"},
+            {"agent_id": "a2", "party_id_3": "republican", "state_po": "PA"},
+        ]
+    )
+    metrics = individual_turnout_vote_metrics(
+        responses,
+        targets,
+        "r",
+        agents=agents,
+        subgroup_columns=["party_id"],
+        small_n_threshold=30,
+    )
+    assert {"turnout_auc", "vote_macro_f1", "vote_log_loss", "vote_confusion_count"} <= set(metrics["metric_name"])
+    assert metrics[metrics["metric_scope"] == "subgroup"]["small_n"].all()
+
+    aggregate = pd.DataFrame(
+        [
+            {
+                "state_po": "PA",
+                "baseline": "b",
+                "model_name": "m",
+                "dem_share_2p": 0.52,
+                "margin_2p": 0.04,
+                "winner": "democrat",
+            }
+        ]
+    )
+    mit = normalize_mit_results("configs/datasets/mit_president_county_fixture.yaml", 2024)
+    agg_metrics = turnout_vote_election_metrics(aggregate, mit, "r")
+    assert {"state_dem_2p_rmse", "state_margin_mae", "winner_accuracy", "state_margin_error"} <= set(
+        agg_metrics["metric_name"]
+    )
 
 
 def test_gdelt_context_card_time_leakage_filter():

@@ -11,17 +11,20 @@ from .io import load_yaml, write_table
 from .transforms import clean_string
 
 
-LEAKAGE_VARIABLES_STRICT = {
+TARGET_POST_VARIABLES = {
     "CC24_401",
     "CC24_410",
     "CC24_410_NV",
-    "TS_G2024",
 }
 
-LEAKAGE_PREFIXES_STRICT = (
-    "TS_",
+TARGETSMART_PREFIXES = ("TS_",)
+
+POST_TARGET_PREFIXES = (
     "CC24_40",
     "CC24_41",
+)
+
+DIRECT_PRE_VOTE_PREFIXES = (
     "CC24_363",
     "CC24_364",
     "CC24_365",
@@ -29,14 +32,52 @@ LEAKAGE_PREFIXES_STRICT = (
     "CC24_367",
 )
 
+SUPPORTED_MEMORY_POLICIES = {
+    "strict_pre_no_vote_v1",
+    "poll_informed_pre_v1",
+    "post_hoc_explanation_v1",
+    "safe_survey_memory_v1",
+}
+
+
+def is_targetsmart_variable(source_variable: Any) -> bool:
+    var = clean_string(source_variable).upper()
+    return any(var.startswith(prefix) for prefix in TARGETSMART_PREFIXES)
+
+
+def is_direct_pre_vote_variable(source_variable: Any) -> bool:
+    var = clean_string(source_variable).upper()
+    return any(var.startswith(prefix) for prefix in DIRECT_PRE_VOTE_PREFIXES)
+
+
+def is_post_vote_or_turnout_variable(source_variable: Any) -> bool:
+    var = clean_string(source_variable).upper()
+    return var in TARGET_POST_VARIABLES or any(var.startswith(prefix) for prefix in POST_TARGET_PREFIXES)
+
+
+def fact_role_for_variable(source_variable: Any, policy: str) -> str:
+    if policy == "poll_informed_pre_v1" and is_direct_pre_vote_variable(source_variable):
+        return "poll_prior"
+    if policy == "post_hoc_explanation_v1":
+        return "post_hoc_context"
+    return "safe_pre"
+
+
+def leakage_reason(source_variable: Any, policy: str) -> str | None:
+    if policy not in SUPPORTED_MEMORY_POLICIES:
+        return "unsupported_memory_policy"
+    if is_targetsmart_variable(source_variable):
+        return "targetsmart_evaluation_only"
+    if is_post_vote_or_turnout_variable(source_variable):
+        return "policy_blocks_post_vote_or_turnout"
+    if policy == "strict_pre_no_vote_v1" and is_direct_pre_vote_variable(source_variable):
+        return "strict_policy_blocks_direct_pre_vote_intention"
+    return None
 
 def is_leakage_variable(source_variable: Any, policy: str) -> bool:
     """Return whether a source variable is blocked by a memory policy."""
 
-    var = clean_string(source_variable).upper()
-    if policy != "strict_pre_no_vote_v1":
-        return False
-    return var in LEAKAGE_VARIABLES_STRICT or any(var.startswith(prefix) for prefix in LEAKAGE_PREFIXES_STRICT)
+    return leakage_reason(source_variable, policy) is not None
 
 
 def _as_bool(value: Any) -> bool:
@@ -95,6 +136,8 @@ class LeakageGuard:
                 ~out["excluded_target_topics"].apply(lambda topics: question.get("topic") in self._as_set(topics))
             ]
         excluded_vars = set(question.get("excluded_memory_variables") or [])
+        if memory_policy in {"poll_informed_pre_v1", "post_hoc_explanation_v1"}:
+            excluded_vars = {var for var in excluded_vars if not is_direct_pre_vote_variable(var)}
         if excluded_vars and "source_variable" in out.columns:
             out = out[~out["source_variable"].isin(excluded_vars)]
         excluded_topics = set(question.get("excluded_memory_topics") or [])
@@ -178,6 +221,7 @@ def build_survey_memory_cards(
         if part.empty:
             continue
         allowed_policies = list(tpl.get("allowed_memory_policies", [policy]))
+        fact_role = tpl.get("fact_role") or fact_role_for_variable(source_var, policy)
         fact_ids = (
             output_prefix
             + "_"
@@ -206,6 +250,7 @@ def build_survey_memory_cards(
                 "excluded_target_question_ids": [list(tpl.get("excluded_target_question_ids", []))] * len(part),
                 "excluded_target_topics": [list(tpl.get("excluded_target_topics", []))] * len(part),
                 "memory_policy": policy,
+                "fact_role": fact_role,
                 "leakage_group": part.get(
                     "leakage_group",
                     pd.Series(tpl.get("leakage_group", "safe_pre"), index=part.index),
@@ -231,6 +276,7 @@ def build_survey_memory_cards(
         "excluded_target_question_ids",
         "excluded_target_topics",
         "memory_policy",
+        "fact_role",
         "leakage_group",
         "created_at",
     ]
@@ -306,17 +352,24 @@ def build_leakage_audit(
 ) -> Path:
     templates_raw = load_yaml(fact_templates_path)
     templates = templates_raw.get("templates", templates_raw) if isinstance(templates_raw, dict) else templates_raw
-    templated_vars = {tpl["source_variable"] for tpl in templates or []}
+    templates = templates or []
+    template_by_var = {tpl["source_variable"]: tpl for tpl in templates}
+    templated_vars = set(template_by_var)
     rows: list[dict[str, Any]] = []
     for source_var in sorted(set(answers.get("source_variable", pd.Series(dtype=str)).dropna().astype(str))):
-        excluded = is_leakage_variable(source_var, policy)
+        reason = leakage_reason(source_var, policy)
+        excluded = reason is not None
+        tpl = template_by_var.get(source_var, {})
+        fact_role = tpl.get("fact_role") or fact_role_for_variable(source_var, policy)
+        leakage_group = tpl.get("leakage_group")
+        if leakage_group is None and "leakage_group" in answers.columns:
+            matches = answers.loc[answers["source_variable"] == source_var, "leakage_group"].dropna()
+            leakage_group = matches.iloc[0] if not matches.empty else None
         if source_var not in templated_vars and not excluded:
             reason = "no_fact_template"
             excluded = True
-        elif excluded:
-            reason = "strict_policy_blocks_vote_or_validation_variable"
         else:
-            reason = "allowed"
+            reason = reason or "allowed"
         rows.append(
             {
                 "source_variable": source_var,
@@ -325,18 +378,43 @@ def build_leakage_audit(
                 "excluded": excluded,
                 "reason": reason,
                 "target_id": None,
+                "fact_role": fact_role,
+                "leakage_group": leakage_group,
+                "potential_leakage_warning": bool(
+                    not excluded and fact_role in {"poll_prior", "post_hoc_context"}
+                ),
             }
         )
-    for source_var in ["CC24_401", "CC24_410", "CC24_410_nv", "TS_g2024", "CC24_363", "CC24_364a", "CC24_365"]:
+    for source_var in [
+        "CC24_401",
+        "CC24_410",
+        "CC24_410_nv",
+        "TS_g2024",
+        "TS_voterstatus",
+        "TS_partyreg",
+        "CC24_363",
+        "CC24_364a",
+        "CC24_365",
+    ]:
         if source_var not in {row["source_variable"] for row in rows}:
+            reason = leakage_reason(source_var, policy)
+            excluded = reason is not None or source_var not in templated_vars
             rows.append(
                 {
                     "source_variable": source_var,
                     "question_id": None,
                     "policy": policy,
-                    "excluded": True,
-                    "reason": "strict_policy_blocks_vote_or_validation_variable",
+                    "excluded": excluded,
+                    "reason": reason or "no_fact_template",
                     "target_id": None,
+                    "fact_role": template_by_var.get(source_var, {}).get(
+                        "fact_role", fact_role_for_variable(source_var, policy)
+                    ),
+                    "leakage_group": template_by_var.get(source_var, {}).get("leakage_group"),
+                    "potential_leakage_warning": bool(
+                        not excluded
+                        and fact_role_for_variable(source_var, policy) in {"poll_prior", "post_hoc_context"}
+                    ),
                 }
             )
     audit = pd.DataFrame(rows)

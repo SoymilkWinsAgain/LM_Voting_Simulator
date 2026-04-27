@@ -1,4 +1,4 @@
-run_id: ces_2024_president_smoke
+run_id: ces_2024_president_swing_poll_informed
 seed: 20260426
 mode: ces_election_simulation
 
@@ -6,25 +6,25 @@ scenario:
   year: 2024
   office: president
   election_day: "2024-11-05"
-  states: ["PA"]
+  states: ["PA", "MI", "WI", "GA", "AZ", "NV", "NC"]
   level: respondent
 
 population:
   source: ces_rows
   selection:
-    states: ["PA"]
+    states: ["PA", "MI", "WI", "GA", "AZ", "NV", "NC"]
     tookpost_required: true
     citizen_required: true
   sampling:
-    mode: weighted_sample
-    n_total_agents: 10
-    random_seed: 2024
+    mode: stratified_state_sample
+    n_agents_per_state: 100
+    random_seed: 2025
   weight:
     column: weight_common_post
 
 memory:
   source: ces
-  memory_policy: strict_pre_no_vote_v1
+  memory_policy: poll_informed_pre_v1
   max_memory_facts: 24
 
 tasks:
@@ -39,6 +39,7 @@ baselines:
   - survey_memory_llm
   - party_id_baseline
   - sklearn_logit_pre_only
+  - sklearn_logit_poll_informed
 
 model:
   provider: mock
@@ -53,19 +54,21 @@ evaluation:
     enabled: true
     turnout_truth: turnout_2024_self_report
     vote_truth: president_vote_2024
+    small_n_threshold: 30
+    subgroups: [party_id, ideology, race_ethnicity, education, age_group, gender, state]
   aggregate:
     enabled: true
     mit_results_year: 2024
 
 paths:
-  processed_dir: data/processed/ces/2024_common_vv
-  run_dir: data/runs/ces_2024_president_smoke
+  processed_dir: data/processed/ces/2024_common_vv_poll
+  run_dir: data/runs/ces_2024_president_swing_poll_informed
   ces_respondents: data/processed/ces/2024_common_vv/ces_respondents.parquet
   ces_answers: data/processed/ces/2024_common_vv/ces_answers.parquet
   ces_targets: data/processed/ces/2024_common_vv/ces_targets.parquet
   ces_context: data/processed/ces/2024_common_vv/ces_context.parquet
-  ces_memory_cards: data/processed/ces/2024_common_vv/ces_memory_cards.parquet
-  ces_memory_facts: data/processed/ces/2024_common_vv/ces_memory_facts.parquet
-  ces_leakage_audit: data/processed/ces/2024_common_vv/ces_leakage_audit.parquet
+  ces_memory_cards: data/processed/ces/2024_common_vv_poll/ces_memory_cards.parquet
+  ces_memory_facts: data/processed/ces/2024_common_vv_poll/ces_memory_facts.parquet
+  ces_leakage_audit: data/processed/ces/2024_common_vv_poll/ces_leakage_audit.parquet
   question_set: configs/questions/ces_2024_president_turnout_vote.yaml
-  mit_config: configs/datasets/mit_president_county_fixture.yaml
+  mit_config: configs/datasets/mit_president_county_2024_swing_fixture.yaml

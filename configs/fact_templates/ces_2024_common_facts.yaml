@@ -75,3 +75,17 @@ templates:
     topic: housing
     priority: 60
     template: "The respondent says they {answer_label_lower} relaxing local zoning laws to allow more apartments and condos."
+  - source_variable: CC24_363
+    topic: turnout_intention
+    priority: 110
+    fact_role: poll_prior
+    leakage_group: direct_pre_vote_intention
+    allowed_memory_policies: [poll_informed_pre_v1, post_hoc_explanation_v1]
+    template: "Poll prior: before the election, the respondent said their likelihood of voting was {answer_label_lower}."
+  - source_variable: CC24_364a
+    topic: vote_intention
+    priority: 108
+    fact_role: poll_prior
+    leakage_group: direct_pre_vote_intention
+    allowed_memory_policies: [poll_informed_pre_v1, post_hoc_explanation_v1]
+    template: "Poll prior: before the election, the respondent's presidential candidate preference was {answer_label}."

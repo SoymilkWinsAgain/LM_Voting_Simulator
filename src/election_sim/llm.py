@@ -7,6 +7,7 @@ import os
 from dataclasses import dataclass
 from urllib import request
 
+from .ces_schema import format_turnout_vote_response
 from .config import ModelConfig
 
 
@@ -38,13 +39,11 @@ class MockLLMClient:
                 probs = {"democrat": 0.4, "republican": 0.4, "other": 0.08, "undecided": 0.12}
                 choice = "undecided"
                 confidence = 0.45
-            return json.dumps(
-                {
-                    "turnout_probability": 0.86,
-                    "vote_probabilities": probs,
-                    "most_likely_choice": choice,
-                    "confidence": confidence,
-                }
+            return format_turnout_vote_response(
+                turnout_probability=0.86,
+                vote_probabilities=probs,
+                most_likely_choice=choice,
+                confidence=confidence,
             )
         if "party identification: democrat" in lowered:
             answer = "democrat"

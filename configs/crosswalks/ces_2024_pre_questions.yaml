@@ -164,3 +164,51 @@ questions:
       "3": republican
       "4": independent_or_other
       "5": unknown
+  - question_id: pre_turnout_intention
+    source_variable: CC24_363
+    question_text: "Before the election, how likely did the respondent say they were to vote?"
+    topic: turnout_intention
+    wave: pre
+    allowed_for_memory_strict: false
+    leakage_group: direct_pre_vote_intention
+    fact_role: poll_prior
+    labels:
+      "1": Definitely will vote
+      "2": Probably will vote
+      "3": Already voted
+      "4": Probably will not vote
+      "5": Definitely will not vote
+      "6": Not sure
+    canonical_mapping:
+      "1": likely_vote
+      "2": likely_vote
+      "3": already_voted
+      "4": likely_not_vote
+      "5": likely_not_vote
+      "6": undecided
+  - question_id: pre_president_vote_intention
+    source_variable: CC24_364a
+    question_text: "Before the election, whom did the respondent say they would vote for president?"
+    topic: vote_intention
+    wave: pre
+    allowed_for_memory_strict: false
+    leakage_group: direct_pre_vote_intention
+    fact_role: poll_prior
+    labels:
+      "1": Kamala Harris
+      "2": Donald Trump
+      "3": Robert F. Kennedy Jr.
+      "4": Jill Stein
+      "5": Cornel West
+      "6": Other
+      "7": Not sure
+      "8": Would not vote
+    canonical_mapping:
+      "1": democrat
+      "2": republican
+      "3": other
+      "4": other
+      "5": other
+      "6": other
+      "7": undecided
+      "8": not_vote

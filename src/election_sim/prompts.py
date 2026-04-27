@@ -9,6 +9,7 @@ from typing import Any
 import pandas as pd
 from jinja2 import Template
 
+from .ces_schema import parse_turnout_vote_json
 from .survey_memory import LeakageGuard
 
 
@@ -98,7 +99,6 @@ Voter profile:
 - 7-point party ID: {{ party_id_7 }}
 - Ideology: {{ ideology_3 }}
 - Registered to vote, self-report pre-election: {{ registered_self_pre }}
-- Validated registration status: {{ validated_registration }}
 
 Survey-derived background facts:
 {% for fact in memory_facts -%}
@@ -247,7 +247,6 @@ def build_ces_prompt(
         party_id_7=agent.get("party_id_7") or "unknown",
         ideology_3=agent.get("ideology_3") or "unknown",
         registered_self_pre=agent.get("registered_self_pre") or "unknown",
-        validated_registration=agent.get("validated_registration"),
         memory_facts=prompt_facts,
         candidates=candidates,
     )
@@ -276,57 +275,3 @@ def parse_json_answer(raw_response: str, allowed: list[str]) -> dict[str, Any]:
     except (TypeError, ValueError):
         confidence = 0.0
     return {"answer": answer, "confidence": confidence, "parse_status": "ok"}
-
-
-def _json_payload(raw_response: str) -> dict[str, Any] | None:
-    text = raw_response.strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-        if not match:
-            return None
-        try:
-            return json.loads(match.group(0))
-        except json.JSONDecodeError:
-            return None
-
-
-def _bounded_float(value: Any, default: float | None = None) -> float | None:
-    try:
-        return max(0.0, min(1.0, float(value)))
-    except (TypeError, ValueError):
-        return default
-
-
-def parse_turnout_vote_json(raw_response: str) -> dict[str, Any]:
-    payload = _json_payload(raw_response)
-    if payload is None:
-        return {"parse_status": "failed"}
-    turnout = _bounded_float(payload.get("turnout_probability"))
-    probs = payload.get("vote_probabilities")
-    if turnout is None or not isinstance(probs, dict):
-        return {"parse_status": "invalid_schema"}
-    vote_codes = ["democrat", "republican", "other", "undecided"]
-    parsed_probs = {code: _bounded_float(probs.get(code), 0.0) or 0.0 for code in vote_codes}
-    total = sum(parsed_probs.values())
-    if total <= 0:
-        return {"parse_status": "invalid_schema"}
-    parsed_probs = {code: value / total for code, value in parsed_probs.items()}
-    choice = payload.get("most_likely_choice")
-    allowed_choices = set(vote_codes + ["not_vote"])
-    if choice not in allowed_choices:
-        choice = max(parsed_probs, key=parsed_probs.get)
-        if turnout < 0.5:
-            choice = "not_vote"
-    confidence = _bounded_float(payload.get("confidence"), 0.0) or 0.0
-    return {
-        "parse_status": "ok",
-        "turnout_probability": turnout,
-        "vote_prob_democrat": parsed_probs["democrat"],
-        "vote_prob_republican": parsed_probs["republican"],
-        "vote_prob_other": parsed_probs["other"],
-        "vote_prob_undecided": parsed_probs["undecided"],
-        "most_likely_choice": choice,
-        "confidence": confidence,
-    }

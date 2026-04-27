@@ -95,6 +95,7 @@ CES_ANSWER_COLUMNS = [
     "is_pre_election",
     "allowed_for_memory_strict",
     "leakage_group",
+    "fact_role",
     "is_missing",
     "schema_version",
 ]
@@ -383,6 +384,7 @@ def build_ces_answers(
                 "is_grid_item": bool(question.get("is_grid_item", False)),
                 "allowed_for_memory_strict": bool(question.get("allowed_for_memory_strict", True)),
                 "leakage_group": question.get("leakage_group", "safe_pre"),
+                "fact_role": question.get("fact_role", "safe_pre"),
                 "schema_version": "ces_question_bank_2024_v1",
             }
         )
@@ -408,6 +410,7 @@ def build_ces_answers(
                     "is_pre_election": question.get("wave", "pre") == "pre",
                     "allowed_for_memory_strict": bool(question.get("allowed_for_memory_strict", True)),
                     "leakage_group": question.get("leakage_group", "safe_pre"),
+                    "fact_role": question.get("fact_role", "safe_pre"),
                     "is_missing": _is_answer_missing(raw_value, answer_label),
                     "schema_version": "ces_answers_2024_v1",
                 }

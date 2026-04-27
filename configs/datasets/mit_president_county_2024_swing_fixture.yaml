@@ -1,0 +1,15 @@
+name: mit_president_county_2024_swing_fixture
+source: mit_election_lab_fixture
+year: 2024
+office: president
+level: county
+path: data/raw/fixture/mit/president_county_2024_swing_fixture.csv
+columns:
+  state_po: state_po
+  state_fips: state_fips
+  county_name: county_name
+  county_fips: county_fips
+  candidate: candidate
+  party_detailed: party_detailed
+  candidatevotes: candidatevotes
+  totalvotes: totalvotes
