@@ -16,9 +16,7 @@ population:
     tookpost_required: true
     citizen_required: true
   sampling:
-    mode: stratified_state_sample
-    n_agents_per_state: 100
-    random_seed: 2024
+    mode: all_rows
   weight:
     column: weight_common_post
 

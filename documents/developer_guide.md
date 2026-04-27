@@ -241,6 +241,13 @@ conda run -n jigsaw python -m election_sim.cli run-simulation \
 conda run -n jigsaw python -m pytest
 ```
 
+The default swing configs are the formal row-level configs: they use
+`population.sampling.mode: all_rows` after state/tookpost/citizenship filters
+and read `data/processed/mit/president_state_truth.parquet`. Use
+`ces_2024_president_swing_strict_pre_smoke.yaml` and
+`ces_2024_president_swing_poll_informed_smoke.yaml` only for 100-per-state fast
+validation.
+
 Optional real-model smoke:
 
 ```bash
@@ -256,7 +263,8 @@ After a full-chain run:
   file.
 - strict memory should have zero prompt facts from `TS_*`, `CC24_401`,
   `CC24_410`, and direct pre-vote variables.
-- swing runs should have 700 agents by default.
+- default swing runs should use all eligible CES respondents in the selected
+  states; only `_smoke` swing configs should have 700 agents by default.
 - mock CES response parse rate should be 100 percent.
 - aggregate metrics should include `dem_2p_rmse`, `margin_mae`,
   `winner_accuracy`, state-level errors, and national dem 2p error.

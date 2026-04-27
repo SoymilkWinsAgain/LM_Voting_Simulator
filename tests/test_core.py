@@ -909,3 +909,26 @@ def test_real_anes_one_agent_mock_smoke_writes_prompt_response_report():
     assert responses.iloc[0]["parse_status"] == "ok"
     assert outputs["prompt_preview"].read_text(encoding="utf-8").count("Additional survey-derived background facts") == 1
     assert outputs["report"].exists()
+
+
+def test_default_swing_configs_are_formal_not_smoke():
+    for path in [
+        "configs/runs/ces_2024_president_swing_strict_pre.yaml",
+        "configs/runs/ces_2024_president_swing_poll_informed.yaml",
+    ]:
+        cfg = load_yaml(path)
+        assert cfg["population"]["sampling"]["mode"] == "all_rows"
+        assert "n_agents_per_state" not in cfg["population"]["sampling"]
+        assert cfg["evaluation"]["aggregate"]["truth_path"] == "data/processed/mit/president_state_truth.parquet"
+        assert "mit_config" not in cfg["paths"]
+
+
+def test_swing_smoke_configs_are_explicit_fast_validation():
+    for path in [
+        "configs/runs/ces_2024_president_swing_strict_pre_smoke.yaml",
+        "configs/runs/ces_2024_president_swing_poll_informed_smoke.yaml",
+    ]:
+        cfg = load_yaml(path)
+        assert cfg["population"]["sampling"]["mode"] == "stratified_state_sample"
+        assert cfg["population"]["sampling"]["n_agents_per_state"] == 100
+        assert cfg["evaluation"]["aggregate"]["truth_path"] == "data/processed/mit/president_state_truth.parquet"

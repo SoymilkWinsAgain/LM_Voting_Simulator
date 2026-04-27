@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from typing import Any
 
 import pandas as pd
@@ -238,16 +239,21 @@ def build_prompt(
 def ces_memory_facts_for_agent(
     agent: pd.Series,
     question: pd.Series | dict[str, Any],
-    memory_facts: pd.DataFrame,
+    memory_facts: pd.DataFrame | Mapping[str, pd.DataFrame],
     *,
     memory_policy: str,
     max_facts: int,
     fact_roles: list[str] | None = None,
 ) -> tuple[list[str], list[str]]:
-    if memory_facts.empty:
-        return [], []
     base_ces_id = str(agent.get("base_ces_id") or agent.get("source_respondent_id"))
-    facts = memory_facts[memory_facts["ces_id"].astype(str) == base_ces_id]
+    if isinstance(memory_facts, Mapping):
+        facts = memory_facts.get(base_ces_id)
+        if facts is None or facts.empty:
+            return [], []
+    else:
+        if memory_facts.empty:
+            return [], []
+        facts = memory_facts[memory_facts["ces_id"].astype(str) == base_ces_id]
     filtered = LeakageGuard().filter_facts(facts, question, memory_policy)
     if fact_roles is not None:
         allowed_roles = set(fact_roles)
@@ -266,8 +272,8 @@ def build_ces_prompt(
     agent: pd.Series,
     question: pd.Series | dict[str, Any],
     *,
-    memory_facts: pd.DataFrame,
-    context: pd.DataFrame,
+    memory_facts: pd.DataFrame | Mapping[str, pd.DataFrame],
+    context: pd.DataFrame | Mapping[str, list[dict[str, Any]]],
     memory_policy: str = "strict_pre_no_vote_v1",
     max_memory_facts: int = 24,
     prompt_mode: str = "ces_survey_memory",
@@ -287,7 +293,10 @@ def build_ces_prompt(
             fact_roles=list(mode_cfg["fact_roles"]),
         )
     base_ces_id = str(agent.get("base_ces_id") or agent.get("source_respondent_id"))
-    candidates = context[context["ces_id"].astype(str) == base_ces_id].to_dict("records")
+    if isinstance(context, Mapping):
+        candidates = list(context.get(base_ces_id, []))
+    else:
+        candidates = context[context["ces_id"].astype(str) == base_ces_id].to_dict("records")
     if not candidates:
         candidates = [
             {"candidate_party": "Democratic", "candidate_name": "Kamala Harris"},

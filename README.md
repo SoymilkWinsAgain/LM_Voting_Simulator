@@ -97,6 +97,15 @@ conda run -n jigsaw python -m election_sim.cli run-simulation \
   --run-config configs/runs/ces_2024_president_swing_strict_pre.yaml
 ```
 
+The default swing configs use all eligible CES respondents in the selected
+states and evaluate against real processed MIT state truth. For fast validation
+without running the full row set, use the `_smoke` variants:
+
+```bash
+conda run -n jigsaw python -m election_sim.cli run-simulation \
+  --run-config configs/runs/ces_2024_president_swing_strict_pre_smoke.yaml
+```
+
 For poll-informed prompts, build a separate memory directory and run:
 
 ```bash
@@ -231,7 +240,7 @@ guidance.
 
 - CES aggregate evaluation is state-level. County MIT truth and historical
   features are generated for future county-aware simulation.
-- Default swing configs use `100` respondents per state for fast validation,
-  not final research-scale estimates.
+- The `_smoke` swing configs use `100` respondents per state for fast
+  validation and should not be used for final conclusions.
 - Real LLM providers may produce invalid JSON or malformed probabilities; raw
   responses and parse status are preserved in `responses.parquet` and reports.

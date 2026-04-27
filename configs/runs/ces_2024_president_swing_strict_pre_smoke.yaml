@@ -1,4 +1,4 @@
-run_id: ces_2024_president_swing_poll_informed
+run_id: ces_2024_president_swing_strict_pre_smoke
 seed: 20260426
 mode: ces_election_simulation
 
@@ -16,13 +16,15 @@ population:
     tookpost_required: true
     citizen_required: true
   sampling:
-    mode: all_rows
+    mode: stratified_state_sample
+    n_agents_per_state: 100
+    random_seed: 2024
   weight:
     column: weight_common_post
 
 memory:
   source: ces
-  memory_policy: poll_informed_pre_v1
+  memory_policy: strict_pre_no_vote_v1
   max_memory_facts: 24
 
 tasks:
@@ -34,10 +36,9 @@ prompt:
   include_gdelt_context: false
 
 baselines:
-  - ces_poll_informed_llm
+  - ces_survey_memory_llm
   - party_id_baseline
   - sklearn_logit_pre_only
-  - sklearn_logit_poll_informed
 
 model:
   provider: mock
@@ -63,15 +64,15 @@ evaluation:
     geo_cols: ["state_po"]
 
 paths:
-  processed_dir: data/processed/ces/2024_common_vv_poll
-  run_dir: data/runs/ces_2024_president_swing_poll_informed
+  processed_dir: data/processed/ces/2024_common_vv
+  run_dir: data/runs/ces_2024_president_swing_strict_pre_smoke
   ces_respondents: data/processed/ces/2024_common_vv/ces_respondents.parquet
   ces_answers: data/processed/ces/2024_common_vv/ces_answers.parquet
   ces_targets: data/processed/ces/2024_common_vv/ces_targets.parquet
   ces_context: data/processed/ces/2024_common_vv/ces_context.parquet
-  ces_memory_cards: data/processed/ces/2024_common_vv_poll/ces_memory_cards.parquet
-  ces_memory_facts: data/processed/ces/2024_common_vv_poll/ces_memory_facts.parquet
-  ces_leakage_audit: data/processed/ces/2024_common_vv_poll/ces_leakage_audit.parquet
+  ces_memory_cards: data/processed/ces/2024_common_vv/ces_memory_cards.parquet
+  ces_memory_facts: data/processed/ces/2024_common_vv/ces_memory_facts.parquet
+  ces_leakage_audit: data/processed/ces/2024_common_vv/ces_leakage_audit.parquet
   question_set: configs/questions/ces_2024_president_turnout_vote.yaml
   mit_state_truth: data/processed/mit/president_state_truth.parquet
   mit_historical_features: data/processed/mit/president_historical_features.parquet

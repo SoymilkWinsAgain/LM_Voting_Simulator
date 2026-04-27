@@ -149,14 +149,19 @@ class SklearnLogitBaseline:
         train = train[~train["ces_id"].astype(str).isin(eval_ces_ids)]
         self.turnout_model = self._fit_binary(train, "turnout_2024_self_report")
         self.vote_model = self._fit_multiclass(train, "president_vote_2024")
+        self.raw_prediction_by_id = self._precompute_raw_predictions(eval_ces_ids)
 
     @staticmethod
     def _model_pipeline():
         from sklearn.feature_extraction import DictVectorizer
         from sklearn.linear_model import LogisticRegression
+        from sklearn.multiclass import OneVsRestClassifier
         from sklearn.pipeline import make_pipeline
 
-        return make_pipeline(DictVectorizer(sparse=True), LogisticRegression(max_iter=1000))
+        return make_pipeline(
+            DictVectorizer(sparse=True),
+            OneVsRestClassifier(LogisticRegression(max_iter=200, solver="liblinear")),
+        )
 
     def _records(self, df: pd.DataFrame) -> list[dict[str, str]]:
         return df[self.feature_columns].fillna("unknown").astype(str).to_dict("records")
@@ -204,7 +209,55 @@ class SklearnLogitBaseline:
         probs["undecided"] += missing_mass
         return probs
 
+    def _batch_turnout_probabilities(self, rows: pd.DataFrame) -> np.ndarray:
+        if self.turnout_model is None:
+            return rows.apply(_turnout_for_agent, axis=1).astype(float).to_numpy()
+        classes = list(self.turnout_model.classes_)
+        pred = self.turnout_model.predict_proba(self._records(rows))
+        return pred[:, classes.index(1)] if 1 in classes else np.zeros(len(rows))
+
+    def _batch_vote_probabilities(self, rows: pd.DataFrame) -> list[dict[str, float]]:
+        if self.vote_model is None:
+            return [_vote_probs_for_party(row) for _, row in rows.iterrows()]
+        classes = [str(value) for value in self.vote_model.classes_]
+        pred = self.vote_model.predict_proba(self._records(rows))
+        out: list[dict[str, float]] = []
+        for row_probs in pred:
+            probs = {code: 0.0 for code in CES_VOTE_PROBABILITY_CODES}
+            for klass, value in zip(classes, row_probs, strict=False):
+                if klass in probs:
+                    probs[klass] = float(value)
+            missing_mass = max(0.0, 1.0 - sum(probs.values()))
+            probs["undecided"] += missing_mass
+            out.append(probs)
+        return out
+
+    def _precompute_raw_predictions(self, eval_ces_ids: set[str]) -> dict[str, str]:
+        if not eval_ces_ids:
+            return {}
+        rows = self.features[self.features["ces_id"].astype(str).isin(eval_ces_ids)].copy()
+        if rows.empty:
+            return {}
+        turnout_values = self._batch_turnout_probabilities(rows)
+        vote_values = self._batch_vote_probabilities(rows)
+        cache: dict[str, str] = {}
+        for (_, row), turnout, probs in zip(rows.iterrows(), turnout_values, vote_values, strict=False):
+            choice = _choice(float(turnout), probs)
+            confidence = max([float(turnout), 1.0 - float(turnout), *probs.values()])
+            if choice not in CES_MOST_LIKELY_CHOICES:
+                choice = "undecided"
+            cache[str(row["ces_id"])] = format_turnout_vote_response(
+                turnout_probability=float(np.clip(turnout, 0.0, 1.0)),
+                vote_probabilities=probs,
+                most_likely_choice=choice,
+                confidence=float(np.clip(confidence, 0.0, 1.0)),
+            )
+        return cache
+
     def predict(self, agent: pd.Series) -> CesTurnoutVotePrediction:
+        ces_id = str(agent.get("base_ces_id") or agent.get("source_respondent_id"))
+        if ces_id in self.raw_prediction_by_id:
+            return CesTurnoutVotePrediction(raw_response=self.raw_prediction_by_id[ces_id], model_name=self.model_name)
         row = self._feature_row(agent)
         if row is None:
             return self.fallback.predict(agent)

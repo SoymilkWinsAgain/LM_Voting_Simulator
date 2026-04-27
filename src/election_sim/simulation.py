@@ -79,6 +79,22 @@ def _load_ces_aggregate_truth(cfg: RunConfig, aggregate_cfg: dict[str, Any]) -> 
     return truth
 
 
+def _group_memory_facts_by_ces_id(memory_facts: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    if memory_facts.empty:
+        return {}
+    work = memory_facts.copy()
+    work["ces_id"] = work["ces_id"].astype(str)
+    return {ces_id: group.copy() for ces_id, group in work.groupby("ces_id", sort=False)}
+
+
+def _group_context_by_ces_id(context: pd.DataFrame) -> dict[str, list[dict[str, Any]]]:
+    if context.empty:
+        return {}
+    work = context.copy()
+    work["ces_id"] = work["ces_id"].astype(str)
+    return {ces_id: group.to_dict("records") for ces_id, group in work.groupby("ces_id", sort=False)}
+
+
 def _question_bank_path(cfg: RunConfig, default_path: Path) -> Path:
     return _path(cfg, "question_set") if "question_set" in cfg.paths else default_path
 
@@ -492,6 +508,8 @@ def run_ces_election_simulation(run_config_path: str | Path) -> dict[str, Path]:
     context = pd.read_parquet(_path(cfg, "ces_context"))
     memory_facts = pd.read_parquet(_path(cfg, "ces_memory_facts"))
     memory_cards = pd.read_parquet(_path(cfg, "ces_memory_cards"))
+    memory_facts_by_ces_id = _group_memory_facts_by_ces_id(memory_facts)
+    context_by_ces_id = _group_context_by_ces_id(context)
     questions = load_question_config(_path(cfg, "question_set"))
     question = questions.iloc[0]
 
@@ -523,8 +541,8 @@ def run_ces_election_simulation(run_config_path: str | Path) -> dict[str, Path]:
                 prompt_text, fact_ids = build_ces_prompt(
                     agent,
                     question,
-                    memory_facts=memory_facts,
-                    context=context,
+                    memory_facts=memory_facts_by_ces_id,
+                    context=context_by_ces_id,
                     memory_policy=memory_policy,
                     max_memory_facts=max_memory,
                     prompt_mode=CES_LLM_BASELINE_PROMPT_MODES[baseline_name],
