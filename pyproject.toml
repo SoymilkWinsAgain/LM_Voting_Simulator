@@ -19,6 +19,7 @@ dependencies = [
   "scikit-learn",
   "seaborn",
   "typer",
+  "openpyxl>=3.1,<4",
 ]
 
 [tool.setuptools.packages.find]

@@ -47,6 +47,14 @@ from election_sim.ces_benchmark import (
 )
 from election_sim.ces_schema import format_turnout_vote_response
 from election_sim.ces import build_ces, build_ces_cells, build_ces_memory_cards
+from election_sim.ces_anes_persona import (
+    PERSONA_MEMORY_POLICY,
+    build_anes_bridge_profiles,
+    build_ces_bridge_profiles,
+    classify_open_text_themes,
+    load_persona_config,
+    match_ces_to_anes,
+)
 from election_sim.config import RunConfig, load_cell_schema, load_run_config
 from election_sim.evaluation import election_metrics, individual_turnout_vote_metrics, turnout_vote_election_metrics
 from election_sim.gdelt import load_context_cards, select_context_cards
@@ -129,6 +137,7 @@ def test_packaged_reference_data_contracts():
     assert set(SWING_STATES_2024) == {"PA", "MI", "WI", "GA", "AZ", "NC", "NV"}
     leakage = leakage_policy_reference()
     assert "strict_pre_no_vote_v1" in leakage["supported_memory_policies"]
+    assert PERSONA_MEMORY_POLICY in leakage["supported_memory_policies"]
     assert "CC24_410" in leakage["target_post_variables"]
     assert "TS_" in leakage["targetsmart_prefixes"]
 
@@ -168,6 +177,64 @@ def test_memory_card_respects_max_facts_and_skips_missing_values(tmp_path):
     assert facts["fact_text"].str.len().min() > 0
 
 
+def test_ces_anes_persona_profiles_use_age_and_registration_state_weak_match():
+    cfg = load_persona_config("configs/persona/ces_anes_persona_2024.yaml")
+    ces = pd.DataFrame(
+        [
+            {
+                "ces_id": "c1",
+                "source_year": 2024,
+                "party_id_3_pre": "democrat",
+                "ideology_3": "liberal",
+                "age_group": "30_44",
+                "education_binary": "college_plus",
+                "race_ethnicity": "white",
+                "gender": "female",
+                "income_bin": 5,
+                "region": 1,
+                "state_po": "PA",
+            }
+        ]
+    )
+    anes = pd.DataFrame(
+        [
+            {
+                "V240001": 1,
+                "V241221": 1,
+                "V241177": 2,
+                "V241458x": 35,
+                "V241463": 13,
+                "V241501x": 1,
+                "V241550": 2,
+                "V241023": 42,
+            },
+            {
+                "V240001": 2,
+                "V241221": 2,
+                "V241177": 6,
+                "V241458x": 70,
+                "V241463": 10,
+                "V241501x": 2,
+                "V241550": 1,
+                "V241023": 48,
+            },
+        ]
+    )
+    ces_profiles = build_ces_bridge_profiles(ces, pd.DataFrame(), cfg)
+    anes_profiles = build_anes_bridge_profiles(anes, cfg)
+    matches, summary = match_ces_to_anes(ces_profiles, anes_profiles, cfg)
+    assert anes_profiles.loc[0, "age_group"] == "30_44"
+    assert anes_profiles.loc[0, "registration_state_po"] == "PA"
+    assert anes_profiles.loc[0, "registration_state_is_weak"]
+    assert summary.iloc[0]["top_anes_id"] == "1"
+    assert matches.iloc[0]["registration_state_match"]
+
+
+def test_open_text_theme_classifier_is_deterministic():
+    themes = classify_open_text_themes("Food prices, jobs, and the border are my main concerns.")
+    assert themes == ["economy_prices", "immigration_border"]
+
+
 def test_leakage_guard_removes_vote_choice_facts():
     facts = pd.DataFrame(
         [
@@ -201,6 +268,42 @@ def test_leakage_guard_removes_vote_choice_facts():
     }
     filtered = LeakageGuard().filter_facts(facts, question, "safe_survey_memory_v1")
     assert filtered["memory_fact_id"].tolist() == ["safe"]
+
+
+def test_persona_policy_allows_whitelisted_anes_facts_and_blocks_vote_leaks():
+    facts = pd.DataFrame(
+        [
+            {
+                "memory_fact_id": "persona_ok",
+                "ces_id": "101",
+                "source_variable": "ANES_PERSONA_OPEN_TEXT",
+                "source_variables": ["V241110", "V241170"],
+                "topic": "open_ended_persona",
+                "fact_text": "Matched ANES respondents suggest economy is salient.",
+                "safe_as_memory": True,
+                "allowed_memory_policies": [PERSONA_MEMORY_POLICY],
+                "excluded_target_question_ids": [],
+                "excluded_target_topics": [],
+                "fact_role": "inferred_persona",
+            },
+            {
+                "memory_fact_id": "persona_leak",
+                "ces_id": "101",
+                "source_variable": "ANES_PERSONA_OPEN_TEXT",
+                "source_variables": ["V242067"],
+                "topic": "vote_choice",
+                "fact_text": "Post-election vote leak.",
+                "safe_as_memory": True,
+                "allowed_memory_policies": [PERSONA_MEMORY_POLICY],
+                "excluded_target_question_ids": [],
+                "excluded_target_topics": [],
+                "fact_role": "inferred_persona",
+            },
+        ]
+    )
+    question = {"question_id": "president_turnout_vote_2024", "topic": "vote_choice"}
+    filtered = LeakageGuard().filter_facts(facts, question, PERSONA_MEMORY_POLICY)
+    assert filtered["memory_fact_id"].tolist() == ["persona_ok"]
 
 
 def test_question_bank_options_are_valid():
@@ -1492,6 +1595,62 @@ def test_ces_llm_prompt_information_conditions_are_distinct():
     assert poll_facts == ["safe", "poll"]
     assert CES_LLM_BASELINE_PROMPT_MODES["ces_poll_informed_llm"] == "ces_poll_informed"
     assert CES_LLM_BASELINE_PROMPT_MODES["survey_memory_llm"] == "ces_survey_memory"
+
+
+def test_ces_anes_persona_prompt_separates_observed_and_inferred_facts():
+    agent = pd.Series(
+        {
+            "base_ces_id": "101",
+            "state_po": "PA",
+            "age_group": "45_64",
+            "gender": "female",
+            "race_ethnicity": "white",
+            "education_binary": "college_plus",
+            "party_id_3": "democrat",
+            "party_id_7": "Strong Democrat",
+            "ideology_3": "liberal",
+        }
+    )
+    question = pd.Series({"question_id": "president_turnout_vote_2024", "topic": "vote_choice"})
+    facts = pd.DataFrame(
+        [
+            {
+                "memory_fact_id": "observed",
+                "ces_id": "101",
+                "source_variable": "CC24_303",
+                "fact_text": "The respondent says prices increased.",
+                "fact_priority": 100,
+                "safe_as_memory": True,
+                "allowed_memory_policies": [PERSONA_MEMORY_POLICY],
+                "fact_role": "safe_pre",
+            },
+            {
+                "memory_fact_id": "inferred",
+                "ces_id": "101",
+                "source_variable": "ANES_PERSONA_OPEN_TEXT",
+                "source_variables": ["V241110"],
+                "fact_text": "Matched ANES respondents suggest economy prices is salient.",
+                "fact_priority": 38,
+                "safe_as_memory": True,
+                "allowed_memory_policies": [PERSONA_MEMORY_POLICY],
+                "fact_role": "inferred_persona",
+            },
+        ]
+    )
+    prompt, fact_ids = build_ces_prompt(
+        agent,
+        question,
+        memory_facts=facts,
+        context=pd.DataFrame(),
+        memory_policy=PERSONA_MEMORY_POLICY,
+        prompt_mode="ces_anes_persona",
+    )
+    assert "Strict pre-election CES survey-derived background facts" in prompt
+    assert "ANES-matched inferred persona context" in prompt
+    assert "The respondent says prices increased." in prompt
+    assert "Matched ANES respondents suggest economy prices is salient." in prompt
+    assert fact_ids == ["observed", "inferred"]
+    assert CES_LLM_BASELINE_PROMPT_MODES["ces_anes_persona_llm"] == "ces_anes_persona"
 
 
 def test_archetype_matcher_returns_required_count(tmp_path):

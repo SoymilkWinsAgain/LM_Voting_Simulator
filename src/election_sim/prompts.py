@@ -109,6 +109,13 @@ Voter profile:
 {% endfor %}
 {% endif %}
 
+{% if inferred_persona_facts -%}
+{{ inferred_persona_section_title }}:
+{% for fact in inferred_persona_facts -%}
+- {{ fact }}
+{% endfor %}
+{% endif %}
+
 Election context:
 - Office: President
 {% for candidate in candidates -%}
@@ -144,25 +151,41 @@ CES_PROMPT_MODE_CONFIGS = {
         "include_party_ideology": False,
         "include_memory": False,
         "fact_roles": [],
+        "inferred_persona_roles": [],
         "memory_section_title": "Survey-derived background facts",
+        "inferred_persona_section_title": "ANES-matched inferred persona context",
     },
     "ces_party_ideology": {
         "include_party_ideology": True,
         "include_memory": False,
         "fact_roles": [],
+        "inferred_persona_roles": [],
         "memory_section_title": "Survey-derived background facts",
+        "inferred_persona_section_title": "ANES-matched inferred persona context",
     },
     "ces_survey_memory": {
         "include_party_ideology": True,
         "include_memory": True,
         "fact_roles": ["safe_pre"],
+        "inferred_persona_roles": [],
         "memory_section_title": "Strict pre-election survey-derived background facts",
+        "inferred_persona_section_title": "ANES-matched inferred persona context",
     },
     "ces_poll_informed": {
         "include_party_ideology": True,
         "include_memory": True,
         "fact_roles": ["safe_pre", "poll_prior"],
+        "inferred_persona_roles": [],
         "memory_section_title": "Survey-derived background facts, including poll-prior facts",
+        "inferred_persona_section_title": "ANES-matched inferred persona context",
+    },
+    "ces_anes_persona": {
+        "include_party_ideology": True,
+        "include_memory": True,
+        "fact_roles": ["safe_pre"],
+        "inferred_persona_roles": ["inferred_persona"],
+        "memory_section_title": "Strict pre-election CES survey-derived background facts",
+        "inferred_persona_section_title": "ANES-matched inferred persona context",
     },
 }
 
@@ -171,6 +194,7 @@ CES_LLM_BASELINE_PROMPT_MODES = {
     "ces_party_ideology_llm": "ces_party_ideology",
     "ces_survey_memory_llm": "ces_survey_memory",
     "ces_poll_informed_llm": "ces_poll_informed",
+    "ces_anes_persona_llm": "ces_anes_persona",
     # Backward-compatible aliases used by early CES configs.
     "demographic_only_llm": "ces_demographic_only",
     "party_ideology_llm": "ces_party_ideology",
@@ -283,6 +307,8 @@ def build_ces_prompt(
     mode_cfg = CES_PROMPT_MODE_CONFIGS[prompt_mode]
     prompt_facts: list[str] = []
     fact_ids: list[str] = []
+    inferred_persona_facts: list[str] = []
+    inferred_persona_fact_ids: list[str] = []
     if mode_cfg["include_memory"]:
         prompt_facts, fact_ids = ces_memory_facts_for_agent(
             agent,
@@ -292,9 +318,21 @@ def build_ces_prompt(
             max_facts=max_memory_facts,
             fact_roles=list(mode_cfg["fact_roles"]),
         )
+        inferred_roles = list(mode_cfg.get("inferred_persona_roles", []))
+        if inferred_roles:
+            inferred_persona_facts, inferred_persona_fact_ids = ces_memory_facts_for_agent(
+                agent,
+                question,
+                memory_facts,
+                memory_policy=memory_policy,
+                max_facts=max_memory_facts,
+                fact_roles=inferred_roles,
+            )
     base_ces_id = str(agent.get("base_ces_id") or agent.get("source_respondent_id"))
     if isinstance(context, Mapping):
         candidates = list(context.get(base_ces_id, []))
+    elif context.empty or "ces_id" not in context.columns:
+        candidates = []
     else:
         candidates = context[context["ces_id"].astype(str) == base_ces_id].to_dict("records")
     if not candidates:
@@ -315,9 +353,11 @@ def build_ces_prompt(
         ideology_3=agent.get("ideology_3") or "unknown",
         memory_facts=prompt_facts,
         memory_section_title=mode_cfg["memory_section_title"],
+        inferred_persona_facts=inferred_persona_facts,
+        inferred_persona_section_title=mode_cfg["inferred_persona_section_title"],
         candidates=candidates,
     )
-    return text, fact_ids
+    return text, fact_ids + inferred_persona_fact_ids
 
 
 def parse_json_answer(raw_response: str, allowed: list[str]) -> dict[str, Any]:

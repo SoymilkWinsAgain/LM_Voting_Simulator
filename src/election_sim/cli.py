@@ -10,6 +10,7 @@ from .anes import build_anes, build_memory_cards
 from .ces import build_ces as build_ces_pipeline
 from .ces import build_ces_cells as build_ces_cells_pipeline
 from .ces import build_ces_memory_cards as build_ces_memory_pipeline
+from .ces_anes_persona import build_ces_anes_persona as build_ces_anes_persona_pipeline
 from .ces_aggregate_benchmark import run_ces_aggregate_benchmark
 from .ces_ablation_benchmark import run_ces_ablation_benchmark
 from .ces_benchmark import run_ces_individual_benchmark
@@ -86,6 +87,35 @@ def build_ces_memory(
     max_facts: int = typer.Option(24, "--max-facts"),
 ) -> None:
     paths = build_ces_memory_pipeline(respondents, answers, fact_templates, policy, out, max_facts=max_facts)
+    for name, path in paths.items():
+        typer.echo(f"{name}: {path}")
+
+
+@app.command("build-ces-anes-persona")
+def build_ces_anes_persona(
+    ces_respondents: Path = typer.Option(..., "--ces-respondents"),
+    ces_answers: Path = typer.Option(..., "--ces-answers"),
+    ces_memory_facts: Path = typer.Option(..., "--ces-memory-facts"),
+    ces_memory_cards: Path = typer.Option(..., "--ces-memory-cards"),
+    anes_raw: Path = typer.Option(..., "--anes-raw"),
+    anes_open_ends: Path = typer.Option(..., "--anes-open-ends"),
+    config: Path = typer.Option(..., "--config"),
+    out: Path = typer.Option(..., "--out"),
+    limit_ces: int | None = typer.Option(None, "--limit-ces"),
+    limit_anes: int | None = typer.Option(None, "--limit-anes"),
+) -> None:
+    paths = build_ces_anes_persona_pipeline(
+        ces_respondents_path=ces_respondents,
+        ces_answers_path=ces_answers,
+        ces_memory_facts_path=ces_memory_facts,
+        ces_memory_cards_path=ces_memory_cards,
+        anes_raw_path=anes_raw,
+        anes_open_ends_path=anes_open_ends,
+        config_path=config,
+        out_dir=out,
+        limit_ces=limit_ces,
+        limit_anes=limit_anes,
+    )
     for name, path in paths.items():
         typer.echo(f"{name}: {path}")
 

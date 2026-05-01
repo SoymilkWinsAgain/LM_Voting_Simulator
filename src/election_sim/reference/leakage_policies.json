@@ -1,6 +1,7 @@
 {
   "supported_memory_policies": [
     "strict_pre_no_vote_v1",
+    "strict_pre_no_vote_with_anes_persona_v1",
     "poll_informed_pre_v1",
     "post_hoc_explanation_v1",
     "safe_survey_memory_v1"
@@ -24,6 +25,51 @@
     "CC24_366",
     "CC24_367"
   ],
+  "anes_persona_allowed_variables": [
+    "V241110",
+    "V241112",
+    "V241114",
+    "V241116",
+    "V241117",
+    "V241118",
+    "V241119",
+    "V241120",
+    "V241121",
+    "V241122",
+    "V241123",
+    "V241124",
+    "V241125",
+    "V241126",
+    "V241156",
+    "V241157",
+    "V241158",
+    "V241164",
+    "V241165",
+    "V241166",
+    "V241167",
+    "V241170",
+    "V241172",
+    "V241174",
+    "V241176",
+    "V241228",
+    "V241235",
+    "ANES_PERSONA_EMOTIONS",
+    "ANES_PERSONA_EFFICACY",
+    "ANES_PERSONA_IDENTITY",
+    "ANES_PERSONA_OPEN_TEXT",
+    "ANES_PERSONA_THERMOMETERS"
+  ],
+  "anes_persona_blocked_variables": [
+    "V241039",
+    "V241039z",
+    "V241043",
+    "V241043z",
+    "V241046",
+    "V241046z",
+    "V241049",
+    "V242067",
+    "V242067z"
+  ],
   "audit_probe_variables": [
     "CC24_401",
     "CC24_410",
@@ -33,6 +79,9 @@
     "TS_partyreg",
     "CC24_363",
     "CC24_364a",
-    "CC24_365"
+    "CC24_365",
+    "V241049",
+    "V242067",
+    "ANES_PERSONA_OPEN_TEXT"
   ]
 }

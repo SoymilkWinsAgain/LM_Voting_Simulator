@@ -1,0 +1,103 @@
+policy: strict_pre_no_vote_with_anes_persona_v1
+source_year: 2024
+
+matching:
+  k_retrieve: 20
+  k_min_support: 5
+  tau: 0.15
+  chunk_size: 512
+  max_observed_facts: 24
+  max_persona_facts: 6
+  features:
+    - name: party_id_3
+      kind: nominal
+      weight: 2.0
+      ces_column: party_id_3_pre
+      anes_variable: V241221
+      anes_transform: anes_party_id_3
+    - name: ideology_3
+      kind: nominal
+      weight: 1.5
+      ces_column: ideology_3
+      anes_variable: V241177
+      anes_transform: ideology_3
+    - name: age_group
+      kind: ordinal
+      weight: 1.0
+      order: [18_29, 30_44, 45_64, 65_plus]
+      ces_column: age_group
+      anes_variable: V241458x
+      anes_transform: age_group
+    - name: education_binary
+      kind: nominal
+      weight: 1.0
+      ces_column: education_binary
+      anes_variable: V241463
+      anes_transform: anes_education_binary
+    - name: race_ethnicity
+      kind: nominal
+      weight: 1.0
+      ces_column: race_ethnicity
+      anes_variable: V241501x
+      anes_transform: anes_race_ethnicity
+    - name: gender
+      kind: nominal
+      weight: 0.75
+      ces_column: gender
+      anes_variable: V241550
+      anes_transform: anes_gender
+    - name: income_bin
+      kind: ordinal
+      weight: 0.75
+      ces_column: income_bin
+      anes_variable: null
+      anes_transform: string
+    - name: region
+      kind: nominal
+      weight: 0.75
+      ces_column: region
+      ces_transform: ces_region
+      anes_variable: V241023
+      anes_transform: state_region
+      source_note: "ANES side is derived from registration state, not residence state."
+    - name: registration_state_po
+      kind: nominal
+      weight: 0.25
+      ces_column: state_po
+      anes_variable: V241023
+      anes_transform: state_fips_to_po
+      source_note: "Weak ANES registration-state feature; not a residence-state block."
+
+persona:
+  theme_min_share: 0.2
+  thermometers:
+    V241156: Democratic presidential candidate
+    V241157: Joe Biden
+    V241158: Robert F. Kennedy Jr.
+    V241164: Democratic vice-presidential candidate
+    V241165: Republican vice-presidential candidate
+    V241166: Democratic Party
+    V241167: Republican Party
+  emotions:
+    V241117: hopeful
+    V241118: afraid
+    V241119: outraged
+    V241120: angry
+    V241121: happy
+    V241122: worried
+    V241123: proud
+    V241124: irritated
+    V241125: nervous
+    V241126: concerned
+  identity_efficacy:
+    V241228: party_identity_importance
+    V241235: government_responsiveness
+  open_ends:
+    V241110: likes about Democratic presidential candidate
+    V241112: dislikes about Democratic presidential candidate
+    V241114: likes about Republican presidential candidate
+    V241116: dislikes about Republican presidential candidate
+    V241170: likes about Democratic Party
+    V241172: dislikes about Democratic Party
+    V241174: likes about Republican Party
+    V241176: dislikes about Republican Party

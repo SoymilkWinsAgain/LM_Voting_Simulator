@@ -19,8 +19,18 @@ POST_TARGET_PREFIXES = tuple(str(prefix).upper() for prefix in _LEAKAGE_POLICY_R
 DIRECT_PRE_VOTE_PREFIXES = tuple(
     str(prefix).upper() for prefix in _LEAKAGE_POLICY_REFERENCE["direct_pre_vote_prefixes"]
 )
+ANES_PERSONA_ALLOWED_VARIABLES = {
+    str(var).upper() for var in _LEAKAGE_POLICY_REFERENCE.get("anes_persona_allowed_variables", [])
+}
+ANES_PERSONA_BLOCKED_VARIABLES = {
+    str(var).upper() for var in _LEAKAGE_POLICY_REFERENCE.get("anes_persona_blocked_variables", [])
+}
 AUDIT_PROBE_VARIABLES = tuple(str(var) for var in _LEAKAGE_POLICY_REFERENCE["audit_probe_variables"])
 SUPPORTED_MEMORY_POLICIES = set(_LEAKAGE_POLICY_REFERENCE["supported_memory_policies"])
+STRICT_PRE_NO_DIRECT_VOTE_POLICIES = {
+    "strict_pre_no_vote_v1",
+    "strict_pre_no_vote_with_anes_persona_v1",
+}
 
 
 def is_targetsmart_variable(source_variable: Any) -> bool:
@@ -49,12 +59,18 @@ def fact_role_for_variable(source_variable: Any, policy: str) -> str:
 def leakage_reason(source_variable: Any, policy: str) -> str | None:
     if policy not in SUPPORTED_MEMORY_POLICIES:
         return "unsupported_memory_policy"
+    var = clean_string(source_variable).upper()
     if is_targetsmart_variable(source_variable):
         return "targetsmart_evaluation_only"
     if is_post_vote_or_turnout_variable(source_variable):
         return "policy_blocks_post_vote_or_turnout"
-    if policy == "strict_pre_no_vote_v1" and is_direct_pre_vote_variable(source_variable):
+    if policy in STRICT_PRE_NO_DIRECT_VOTE_POLICIES and is_direct_pre_vote_variable(source_variable):
         return "strict_policy_blocks_direct_pre_vote_intention"
+    if policy == "strict_pre_no_vote_with_anes_persona_v1":
+        if var in ANES_PERSONA_BLOCKED_VARIABLES:
+            return "strict_policy_blocks_anes_vote_or_post_vote_variable"
+        if var.startswith("V242067"):
+            return "strict_policy_blocks_anes_post_vote_variable"
     return None
 
 
@@ -62,6 +78,18 @@ def is_leakage_variable(source_variable: Any, policy: str) -> bool:
     """Return whether a source variable is blocked by a memory policy."""
 
     return leakage_reason(source_variable, policy) is not None
+
+
+def _anes_persona_source_variables_allowed(source_variables: Any) -> bool:
+    variables = {clean_string(var).upper() for var in _as_list(source_variables) if clean_string(var)}
+    if not variables:
+        return False
+    if variables & ANES_PERSONA_BLOCKED_VARIABLES:
+        return False
+    if any(var.startswith("V242067") for var in variables):
+        return False
+    anes_vars = {var for var in variables if var.startswith("V") or var.startswith("ANES_PERSONA_")}
+    return bool(anes_vars) and anes_vars <= ANES_PERSONA_ALLOWED_VARIABLES
 
 
 def _as_bool(value: Any) -> bool:
@@ -109,6 +137,10 @@ class LeakageGuard:
             out = out[out["allowed_memory_policies"].apply(lambda policies: memory_policy in self._as_set(policies))]
         if "source_variable" in out.columns:
             out = out[~out["source_variable"].apply(lambda var: is_leakage_variable(var, memory_policy))]
+        if memory_policy == "strict_pre_no_vote_with_anes_persona_v1" and "source_variables" in out.columns:
+            inferred = out.get("fact_role", pd.Series("", index=out.index)).fillna("").astype(str) == "inferred_persona"
+            allowed = out["source_variables"].apply(_anes_persona_source_variables_allowed)
+            out = out[(~inferred) | allowed]
         if "excluded_target_question_ids" in out.columns:
             out = out[
                 ~out["excluded_target_question_ids"].apply(

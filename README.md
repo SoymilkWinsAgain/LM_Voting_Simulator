@@ -132,6 +132,25 @@ conda run -n voting_simulator python -m election_sim.cli run-simulation \
   --run-config configs/runs/ces_2024_president_swing_poll_informed.yaml
 ```
 
+To enrich CES respondents with matched ANES persona context, build an opt-in
+memory directory. ANES is used only as a donor pool for inferred persona facts;
+MIT remains aggregate evaluation truth only.
+
+```bash
+conda run -n voting_simulator python -m election_sim.cli build-ces-anes-persona \
+  --ces-respondents data/processed/ces/2024_common_vv/ces_respondents.parquet \
+  --ces-answers data/processed/ces/2024_common_vv/ces_answers.parquet \
+  --ces-memory-facts data/processed/ces/2024_common_vv/ces_memory_facts.parquet \
+  --ces-memory-cards data/processed/ces/2024_common_vv/ces_memory_cards.parquet \
+  --anes-raw data/raw/anes/2024/anes_2024.csv \
+  --anes-open-ends data/raw/anes/2024/anes_timeseries_2024_redactedopenends.xlsx \
+  --config configs/persona/ces_anes_persona_2024.yaml \
+  --out data/processed/ces/2024_common_vv_anes_persona
+
+conda run -n voting_simulator python -m election_sim.cli run-simulation \
+  --run-config configs/runs/ces_2024_president_anes_persona_smoke.yaml
+```
+
 Expected run outputs:
 
 ```text
@@ -196,6 +215,9 @@ conda run -n voting_simulator python -m election_sim.cli run-simulation \
   validation fields, and direct pre-election vote intention/preference.
 - `poll_informed_pre_v1`: still excludes post-election and TargetSmart fields,
   but allows direct pre-election turnout/vote intention as `poll_prior`.
+- `strict_pre_no_vote_with_anes_persona_v1`: strict pre-vote CES memory plus
+  whitelisted ANES pre-election inferred persona facts under a separate prompt
+  heading.
 - `post_hoc_explanation_v1`: explanatory-only; reports mark it as not a formal
   prediction policy.
 
@@ -212,6 +234,8 @@ CES LLM baselines are separated by information condition:
   pre-election memory facts.
 - `ces_poll_informed_llm`: demographics plus party/ideology, strict memory
   facts, and `poll_prior` facts from poll-informed memory.
+- `ces_anes_persona_llm`: strict CES memory plus separately labeled
+  ANES-matched inferred persona context.
 
 Older names `demographic_only_llm`, `party_ideology_llm`, and
 `survey_memory_llm` remain accepted as aliases for compatibility, but new CES
