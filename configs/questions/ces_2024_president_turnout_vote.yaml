@@ -4,19 +4,17 @@ source_year: 2024
 source_variable: president_turnout_vote_2024
 topic: vote_choice
 subtopic: president
-question_text: "Estimate this voter's turnout probability and presidential vote choice in the 2024 general election."
+question_text: "Choose whether this voter does not vote, votes for the Democratic candidate, or votes for the Republican candidate in the 2024 general election."
 options:
   democrat: Kamala Harris / Democratic
   republican: Donald Trump / Republican
-  other: Other candidate
-  undecided: Undecided
   not_vote: Does not vote
-canonical_target_type: turnout_vote_probability
+canonical_target_type: turnout_vote_choice
 is_vote_choice: true
 is_candidate_eval: false
 is_party_eval: false
 is_issue_position: false
-allowed_answer_codes: [democrat, republican, other, undecided, not_vote]
+allowed_answer_codes: [not_vote, democrat, republican]
 missing_answer_codes: [unknown]
 excluded_memory_variables:
   - CC24_401

@@ -7,7 +7,7 @@ import os
 from dataclasses import dataclass
 from urllib import request
 
-from .ces_schema import format_turnout_vote_response
+from .ces_schema import format_turnout_vote_choice_response
 from .config import ModelConfig
 
 
@@ -18,33 +18,24 @@ class MockLLMClient:
 
     def complete(self, prompt_text: str, allowed: list[str]) -> str:
         lowered = prompt_text.lower()
-        if "turnout_probability" in lowered and "vote_probabilities" in lowered:
+        if '"choice": "not_vote|candidate_a|candidate_b"' in lowered:
+            if "party identification: republican" in lowered or "ideology: conservative" in lowered:
+                return json.dumps({"choice": "candidate_b"})
+            if "party identification: democrat" in lowered or "ideology: liberal" in lowered:
+                return json.dumps({"choice": "candidate_a"})
+            return json.dumps({"choice": "not_vote"})
+        if '"choice": "not_vote|democrat|republican"' in lowered or "allowed choices:" in lowered:
             if "party identification: democrat" in lowered:
-                probs = {"democrat": 0.76, "republican": 0.14, "other": 0.05, "undecided": 0.05}
                 choice = "democrat"
-                confidence = 0.78
             elif "party identification: republican" in lowered:
-                probs = {"democrat": 0.14, "republican": 0.76, "other": 0.05, "undecided": 0.05}
                 choice = "republican"
-                confidence = 0.78
             elif "ideology: conservative" in lowered:
-                probs = {"democrat": 0.22, "republican": 0.62, "other": 0.08, "undecided": 0.08}
                 choice = "republican"
-                confidence = 0.64
             elif "ideology: liberal" in lowered:
-                probs = {"democrat": 0.62, "republican": 0.22, "other": 0.08, "undecided": 0.08}
                 choice = "democrat"
-                confidence = 0.64
             else:
-                probs = {"democrat": 0.4, "republican": 0.4, "other": 0.08, "undecided": 0.12}
-                choice = "undecided"
-                confidence = 0.45
-            return format_turnout_vote_response(
-                turnout_probability=0.86,
-                vote_probabilities=probs,
-                most_likely_choice=choice,
-                confidence=confidence,
-            )
+                choice = "not_vote"
+            return format_turnout_vote_choice_response(choice)
         if "party identification: democrat" in lowered:
             answer = "democrat"
             confidence = 0.82

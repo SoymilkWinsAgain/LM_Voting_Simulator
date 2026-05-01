@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import json
 import re
-import statistics
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import numpy as np
 import pandas as pd
@@ -35,8 +34,10 @@ from .ces_benchmark import (
     expected_calibration_error,
     turnout_calibration_bins,
 )
+from .ces_schema import parse_turnout_vote_json
 from .config import ModelConfig
-from .io import ensure_dir, load_yaml, stable_json, write_table
+from .eval_suite import git_commit, gpu_peak_summary, gpu_snapshot, raw_choice_diagnostics
+from .io import ensure_dir, load_yaml, stable_json, write_json, write_table, write_yaml
 from .llm import build_llm_client
 from .transforms import stable_hash
 
@@ -52,8 +53,30 @@ LEAKAGE_CONDITIONS = [
     "candidate_swap_placebo",
 ]
 CONDITION_ORDER = {name: idx for idx, name in enumerate(LEAKAGE_CONDITIONS)}
-FICTITIOUS_STATE_CODES = {"PA": "F01", "GA": "F02", "AZ": "F03", "MN": "F04", "VA": "F05", "CO": "F06"}
-STATE_SWAP_MAP = {"PA": "MN", "MN": "PA", "GA": "VA", "VA": "GA", "AZ": "CO", "CO": "AZ"}
+FICTITIOUS_STATE_CODES = {
+    "PA": "F01",
+    "GA": "F02",
+    "AZ": "F03",
+    "MN": "F04",
+    "VA": "F05",
+    "CO": "F06",
+    "MI": "F07",
+    "WI": "F08",
+    "NV": "F09",
+    "NC": "F10",
+}
+STATE_SWAP_MAP = {
+    "PA": "MN",
+    "MN": "PA",
+    "GA": "VA",
+    "VA": "GA",
+    "AZ": "CO",
+    "CO": "AZ",
+    "MI": "NC",
+    "NC": "MI",
+    "WI": "NV",
+    "NV": "WI",
+}
 
 
 @dataclass
@@ -90,9 +113,16 @@ def choose_effective_agents_per_state(
     )
     if projected is None or projected <= max_runtime_minutes:
         return requested_agents_per_state, None, projected
-    candidate = min(30, requested_agents_per_state)
+    if 6 < requested_agents_per_state <= 10:
+        candidate = 6
+        reason = "runtime_reduced_to_6"
+    else:
+        candidate = min(30, requested_agents_per_state)
+        reason = "runtime_reduced_to_30"
+    if candidate >= requested_agents_per_state:
+        return requested_agents_per_state, None, projected
     candidate_projected = candidate * n_states * n_conditions / observed_throughput_per_second / 60.0
-    return candidate, "runtime_reduced_to_30", candidate_projected
+    return candidate, reason, candidate_projected
 
 
 def _weighted_sample(group: pd.DataFrame, *, n: int, seed_key: str, weight_col: str = "sample_weight") -> pd.DataFrame:
@@ -104,7 +134,10 @@ def _weighted_sample(group: pd.DataFrame, *, n: int, seed_key: str, weight_col: 
     if weights is not None and float(weights.sum()) > 0:
         prob = weights.to_numpy(dtype=float)
         prob = prob / prob.sum()
-        return group.iloc[rng.choice(len(group), size=n, replace=False, p=prob)].copy()
+        try:
+            return group.iloc[rng.choice(len(group), size=n, replace=False, p=prob)].copy()
+        except ValueError:
+            return group.iloc[rng.choice(len(group), size=n, replace=False)].copy()
     return group.iloc[rng.choice(len(group), size=n, replace=False)].copy()
 
 
@@ -233,31 +266,11 @@ def render_leakage_prompt(
     candidate_lines, candidate_mode, dem_display, rep_display = candidate_lines_for_condition(condition)
     schema = (
         [
-            "{",
-            '  "turnout_probability": 0.0,',
-            '  "vote_probabilities": {',
-            '    "candidate_a": 0.0,',
-            '    "candidate_b": 0.0,',
-            '    "other": 0.0,',
-            '    "undecided": 0.0',
-            "  },",
-            '  "most_likely_choice": "candidate_a|candidate_b|other|undecided|not_vote",',
-            '  "confidence": 0.0',
-            "}",
+            '{"choice": "not_vote|candidate_a|candidate_b"}',
         ]
         if condition == "anonymous_candidates"
         else [
-            "{",
-            '  "turnout_probability": 0.0,',
-            '  "vote_probabilities": {',
-            '    "democrat": 0.0,',
-            '    "republican": 0.0,',
-            '    "other": 0.0,',
-            '    "undecided": 0.0',
-            "  },",
-            '  "most_likely_choice": "democrat|republican|other|undecided|not_vote",',
-            '  "confidence": 0.0',
-            "}",
+            '{"choice": "not_vote|democrat|republican"}',
         ]
     )
     lines = [
@@ -282,13 +295,11 @@ def render_leakage_prompt(
         [
             "",
             "Task:",
-            "Estimate this voter's turnout probability and presidential vote choice.",
+            "Choose the single election behavior this voter would most likely take.",
             "",
             "Important output rules:",
-            "- Replace every 0.0 placeholder below with your numeric estimates.",
-            "- The four vote probabilities must sum to 1.0.",
-            "- Do not return all-zero vote probabilities.",
-            "- Set confidence above 0.0 unless the response is truly impossible to estimate.",
+            "- Return exactly one choice.",
+            "- Do not include probabilities, confidence, markdown, or explanatory text.",
             "",
             "Return JSON only with this schema:",
             *schema,
@@ -318,17 +329,10 @@ def normalize_leakage_response(raw_response: str, condition: str) -> str:
             payload = json.loads(match.group(0))
         except json.JSONDecodeError:
             return raw_response
-    probs = payload.get("vote_probabilities") or {}
-    if "candidate_a" not in probs and "candidate_b" not in probs:
-        return raw_response
-    payload["vote_probabilities"] = {
-        "democrat": probs.get("candidate_a", probs.get("democrat", 0.0)),
-        "republican": probs.get("candidate_b", probs.get("republican", 0.0)),
-        "other": probs.get("other", 0.0),
-        "undecided": probs.get("undecided", 0.0),
-    }
     choice_map = {"candidate_a": "democrat", "candidate_b": "republican"}
-    payload["most_likely_choice"] = choice_map.get(payload.get("most_likely_choice"), payload.get("most_likely_choice"))
+    if payload.get("choice") not in choice_map:
+        return raw_response
+    payload["choice"] = choice_map[payload["choice"]]
     return json.dumps(payload)
 
 
@@ -391,33 +395,47 @@ def _finish_tasks(
     model_name: str,
     workers: int,
     existing_results: dict[str, dict[str, Any]] | None = None,
-) -> list[tuple[LeakageTask, str, bool, int | None]]:
+    on_result: Callable[[tuple[LeakageTask, str, bool, int | None, str | None]], None] | None = None,
+) -> list[tuple[LeakageTask, str, bool, int | None, str | None]]:
     existing_results = existing_results or {}
 
-    def finish(task: LeakageTask) -> tuple[LeakageTask, str, bool, int | None]:
+    def finish(task: LeakageTask) -> tuple[LeakageTask, str, bool, int | None, str | None]:
+        started_call = time.time()
         if task.cache_key in existing_results:
             row = existing_results[task.cache_key]
-            return task, str(row["raw"]), bool(row["cache_hit"]), row.get("latency_ms")
-        raw, cache_hit, latency_ms = complete_llm_task_with_cache(
-            client=client,
-            cache=cache,
-            cache_key=task.cache_key,
-            run_id=cfg["run_id"],
-            model_name=model_name,
-            baseline=task.condition,
-            prompt_hash=task.prompt_hash,
-            prompt_text=task.prompt_text,
-        )
-        return task, raw, cache_hit, latency_ms
+            return task, str(row["raw"]), bool(row["cache_hit"]), row.get("latency_ms"), row.get("transport_error")
+        try:
+            raw, cache_hit, latency_ms = complete_llm_task_with_cache(
+                client=client,
+                cache=cache,
+                cache_key=task.cache_key,
+                run_id=cfg["run_id"],
+                model_name=model_name,
+                baseline=task.condition,
+                prompt_hash=task.prompt_hash,
+                prompt_text=task.prompt_text,
+            )
+            return task, raw, cache_hit, latency_ms, None
+        except Exception as exc:
+            latency_ms = int((time.time() - started_call) * 1000)
+            return task, "", False, latency_ms, f"{type(exc).__name__}: {exc}"
 
     if workers <= 1:
-        completed = [finish(task) for task in tasks]
+        completed = []
+        for task in tasks:
+            result = finish(task)
+            completed.append(result)
+            if on_result is not None:
+                on_result(result)
     else:
         completed = []
         with ThreadPoolExecutor(max_workers=workers) as executor:
             future_to_task = {executor.submit(finish, task): task for task in tasks}
             for future in as_completed(future_to_task):
-                completed.append(future.result())
+                result = future.result()
+                completed.append(result)
+                if on_result is not None:
+                    on_result(result)
     completed.sort(key=lambda row: (row[0].original_state_po, row[0].base_ces_id, CONDITION_ORDER[row[0].condition]))
     return completed
 
@@ -437,9 +455,12 @@ def run_llm_leakage(
     workers = max(1, int(cfg.get("llm", {}).get("workers", 8)))
     timing_responses = int(cfg.get("llm", {}).get("timing_responses", 40))
     max_runtime_minutes = float(cfg.get("llm", {}).get("max_runtime_minutes", 45.0))
+    checkpoint_every = max(1, int(cfg.get("llm", {}).get("checkpoint_every", 25)))
+    gpu_sample_every = max(1, int(cfg.get("llm", {}).get("gpu_sample_every", checkpoint_every)))
     requested_agents = int(cfg.get("agents_per_state", 40))
     states = list(cfg.get("states", DEFAULT_STATES))
     conditions = [name for name in cfg.get("conditions", LEAKAGE_CONDITIONS) if name in LEAKAGE_CONDITIONS]
+    gpu_snapshots = [gpu_snapshot("run_start")]
 
     tasks = build_leakage_tasks(
         cfg=cfg,
@@ -454,7 +475,7 @@ def run_llm_leakage(
     timing_wall = 0.0
     if timing_tasks:
         started = time.time()
-        for task, raw, cache_hit, latency_ms in _finish_tasks(
+        for task, raw, cache_hit, latency_ms, transport_error in _finish_tasks(
             client=client,
             cache=cache,
             tasks=timing_tasks,
@@ -462,7 +483,12 @@ def run_llm_leakage(
             model_name=model_name,
             workers=workers,
         ):
-            timing_results[task.cache_key] = {"raw": raw, "cache_hit": cache_hit, "latency_ms": latency_ms}
+            timing_results[task.cache_key] = {
+                "raw": raw,
+                "cache_hit": cache_hit,
+                "latency_ms": latency_ms,
+                "transport_error": transport_error,
+            }
             if latency_ms is not None:
                 timing_latencies.append(float(latency_ms) / 1000.0)
         timing_wall = time.time() - started
@@ -478,27 +504,78 @@ def run_llm_leakage(
         keep = set(agents[agents["sample_rank"] <= effective_agents]["base_ces_id"].astype(str))
         tasks = [task for task in tasks if task.base_ces_id in keep]
 
-    started = time.time()
-    completed = _finish_tasks(
-        client=client,
-        cache=cache,
-        tasks=tasks,
-        cfg=cfg,
-        model_name=model_name,
-        workers=workers,
-        existing_results=timing_results,
-    )
-    llm_wall = time.time() - started
     prompt_rows: list[dict[str, Any]] = []
     condition_rows: list[dict[str, Any]] = []
     pred_rows: list[dict[str, Any]] = []
     runtime_rows: list[dict[str, Any]] = []
     cache_hits = 0
     ollama_calls = 0
-    for task, raw, cache_hit, latency_ms in completed:
+
+    def response_frame_from_predictions(rows: list[dict[str, Any]]) -> pd.DataFrame:
+        if not rows:
+            return pd.DataFrame()
+        pred_df = pd.DataFrame(rows)
+        response_rows: list[dict[str, Any]] = []
+        for condition, group in pred_df.groupby("baseline", sort=False):
+            prompt_by_id = {
+                str(row["ces_id"]): {
+                    "prompt_id": row["prompt_id"],
+                    "cache_hit": row["cache_hit"],
+                    "latency_ms": row["latency_ms"],
+                }
+                for _, row in group.iterrows()
+            }
+            response_rows.extend(
+                _response_rows(
+                    run_id=cfg["run_id"],
+                    baseline=condition,
+                    predictions=group[["ces_id", "raw_response", "model_name"]],
+                    cohort=sampled,
+                    prediction_scope="leakage_stress",
+                    is_llm=True,
+                    prompt_by_id=prompt_by_id,
+                )
+            )
+        out = pd.DataFrame(response_rows)
+        if out.empty:
+            return out
+        diagnostics = pred_df[
+            [
+                "prompt_id",
+                "raw_response_original",
+                "raw_choice",
+                "invalid_choice",
+                "forbidden_choice",
+                "legacy_probability_schema",
+                "transport_error",
+            ]
+        ].copy()
+        out = out.merge(diagnostics, on="prompt_id", how="left")
+        out.loc[out["transport_error"].notna(), "parse_status"] = "transport_error"
+        out = out.sort_values(["baseline", "base_ces_id"]).reset_index(drop=True)
+        return out
+
+    def write_checkpoint() -> None:
+        if prompt_rows:
+            write_table(pd.DataFrame(prompt_rows), paths.run_dir / "prompts.partial.parquet")
+        if condition_rows:
+            write_table(pd.DataFrame(condition_rows), paths.run_dir / "condition_metadata.partial.parquet")
+        if pred_rows:
+            write_table(response_frame_from_predictions(pred_rows), paths.run_dir / "responses.partial.parquet")
+        if runtime_rows:
+            write_table(pd.DataFrame(runtime_rows), paths.run_dir / "runtime_log.partial.parquet")
+
+    def record_result(result: tuple[LeakageTask, str, bool, int | None, str | None]) -> None:
+        nonlocal cache_hits, ollama_calls
+        task, raw, cache_hit, latency_ms, transport_error = result
         cache_hits += int(cache_hit)
         ollama_calls += int(not cache_hit)
         normalized = normalize_leakage_response(raw, task.condition)
+        parsed = parse_turnout_vote_json(normalized)
+        parse_status = "transport_error" if transport_error else parsed["parse_status"]
+        raw_diag = raw_choice_diagnostics(normalized)
+        invalid_choice = bool(raw_diag["invalid_choice"] or parse_status == "invalid_choice")
+        legacy_schema = bool(raw_diag["legacy_probability_schema"] or parsed.get("legacy_probability_schema"))
         prompt_rows.append(
             {
                 "run_id": cfg["run_id"],
@@ -513,6 +590,7 @@ def run_llm_leakage(
                 "memory_fact_ids_used": task.fact_ids,
                 "cache_hit": cache_hit,
                 "latency_ms": latency_ms,
+                "transport_error": transport_error,
                 "created_at": pd.Timestamp.now(tz="UTC"),
             }
         )
@@ -537,10 +615,16 @@ def run_llm_leakage(
                 "ces_id": task.base_ces_id,
                 "baseline": task.condition,
                 "raw_response": normalized,
+                "raw_response_original": raw,
                 "model_name": model_name,
                 "prompt_id": task.prompt_id,
                 "cache_hit": cache_hit,
                 "latency_ms": latency_ms,
+                "raw_choice": raw_diag["raw_choice"],
+                "invalid_choice": invalid_choice,
+                "forbidden_choice": bool(raw_diag["forbidden_choice"]),
+                "legacy_probability_schema": legacy_schema,
+                "transport_error": transport_error,
             }
         )
         runtime_rows.append(
@@ -548,34 +632,65 @@ def run_llm_leakage(
                 "run_id": cfg["run_id"],
                 "event": "llm_response",
                 "condition": task.condition,
+                "prompt_id": task.prompt_id,
+                "agent_id": task.agent_id,
                 "base_ces_id": task.base_ces_id,
+                "original_state_po": task.original_state_po,
+                "displayed_state_po": task.displayed_state_po,
                 "cache_hit": cache_hit,
                 "latency_ms": latency_ms,
+                "parse_status": parse_status,
+                "raw_choice": raw_diag["raw_choice"],
+                "invalid_choice": invalid_choice,
+                "forbidden_choice": bool(raw_diag["forbidden_choice"]),
+                "legacy_probability_schema": legacy_schema,
+                "transport_error": transport_error,
                 "created_at": pd.Timestamp.now(tz="UTC"),
             }
         )
+        completed_count = len(runtime_rows)
+        if completed_count % gpu_sample_every == 0:
+            gpu_snapshots.append(gpu_snapshot(f"after_response_{completed_count}"))
+        if completed_count % checkpoint_every == 0:
+            write_checkpoint()
 
-    pred_df = pd.DataFrame(pred_rows)
-    response_rows: list[dict[str, Any]] = []
-    for condition, group in pred_df.groupby("baseline", sort=False):
-        prompt_by_id = {
-            str(row["ces_id"]): {"prompt_id": row["prompt_id"], "cache_hit": row["cache_hit"], "latency_ms": row["latency_ms"]}
-            for _, row in group.iterrows()
-        }
-        response_rows.extend(
-            _response_rows(
-                run_id=cfg["run_id"],
-                baseline=condition,
-                predictions=group[["ces_id", "raw_response", "model_name"]],
-                cohort=sampled,
-                prediction_scope="leakage_stress",
-                is_llm=True,
-                prompt_by_id=prompt_by_id,
-            )
-        )
+    started = time.time()
+    _finish_tasks(
+        client=client,
+        cache=cache,
+        tasks=tasks,
+        cfg=cfg,
+        model_name=model_name,
+        workers=workers,
+        existing_results=timing_results,
+        on_result=record_result,
+    )
+    llm_wall = time.time() - started
+    gpu_snapshots.append(gpu_snapshot("run_end"))
+    write_checkpoint()
+    prompt_rows.sort(key=lambda row: (str(row["base_ces_id"]), CONDITION_ORDER.get(row["condition"], 999)))
+    condition_rows.sort(key=lambda row: (str(row["base_ces_id"]), CONDITION_ORDER.get(row["condition"], 999)))
+    pred_rows.sort(key=lambda row: (str(row["ces_id"]), CONDITION_ORDER.get(row["baseline"], 999)))
+    runtime_rows.sort(key=lambda row: (str(row["base_ces_id"]), CONDITION_ORDER.get(row["condition"], 999)))
+    responses = response_frame_from_predictions(pred_rows)
+    runtime_frame = pd.DataFrame(runtime_rows)
+    latency = pd.to_numeric(runtime_frame.get("latency_ms", pd.Series(dtype=float)), errors="coerce").dropna()
+    llm_runtime_seconds = timing_wall + llm_wall
+    parse_status = runtime_frame.get("parse_status", pd.Series(dtype=str)).fillna("").astype(str) if not runtime_frame.empty else pd.Series(dtype=str)
+    invalid_choice = runtime_frame.get("invalid_choice", pd.Series(dtype=bool)).fillna(False).astype(bool) if not runtime_frame.empty else pd.Series(dtype=bool)
+    forbidden_choice = runtime_frame.get("forbidden_choice", pd.Series(dtype=bool)).fillna(False).astype(bool) if not runtime_frame.empty else pd.Series(dtype=bool)
+    legacy_schema = (
+        runtime_frame.get("legacy_probability_schema", pd.Series(dtype=bool)).fillna(False).astype(bool)
+        if not runtime_frame.empty
+        else pd.Series(dtype=bool)
+    )
+    transport_errors = runtime_frame.get("transport_error", pd.Series(dtype=object)).notna() if not runtime_frame.empty else pd.Series(dtype=bool)
     metadata = {
         "llm_enabled": True,
         "model_name": model_name,
+        "provider": model_cfg.provider,
+        "temperature": model_cfg.temperature,
+        "max_tokens": model_cfg.max_tokens,
         "workers": workers,
         "requested_agents_per_state": requested_agents,
         "effective_agents_per_state": effective_agents,
@@ -583,20 +698,37 @@ def run_llm_leakage(
         "timing_responses": len(timing_tasks),
         "timing_wall_seconds": timing_wall,
         "timing_throughput_per_second": throughput,
-        "median_latency_seconds": statistics.median(timing_latencies) if timing_latencies else None,
         "projected_runtime_minutes": projected_minutes,
         "max_runtime_minutes": max_runtime_minutes,
         "n_selected_tasks": len(tasks),
         "llm_wall_seconds_after_timing": llm_wall,
+        "llm_runtime_seconds": llm_runtime_seconds,
+        "median_latency_seconds": float(latency.median() / 1000.0) if not latency.empty else None,
+        "p90_latency_seconds": float(latency.quantile(0.9) / 1000.0) if not latency.empty else None,
+        "throughput_responses_per_second": float(len(runtime_rows) / llm_runtime_seconds) if llm_runtime_seconds > 0 else None,
         "cache_hits": cache_hits,
         "ollama_calls": ollama_calls,
         "cache_hit_rate": cache_hits / len(tasks) if tasks else None,
+        "parse_ok_rate": float((parse_status == "ok").mean()) if len(parse_status) else None,
+        "invalid_choice_rate": float(invalid_choice.mean()) if len(invalid_choice) else None,
+        "forbidden_choice_rate": float(forbidden_choice.mean()) if len(forbidden_choice) else None,
+        "legacy_probability_schema_rate": float(legacy_schema.mean()) if len(legacy_schema) else None,
+        "transport_error_rate": float(transport_errors.mean()) if len(transport_errors) else None,
+        **gpu_peak_summary(gpu_snapshots),
+        "gpu_snapshots": gpu_snapshots,
     }
+    metadata["all_gates_passed"] = bool(
+        (metadata["parse_ok_rate"] is None or metadata["parse_ok_rate"] >= 0.95)
+        and (metadata["invalid_choice_rate"] is None or metadata["invalid_choice_rate"] <= 0.02)
+        and (metadata["forbidden_choice_rate"] is None or metadata["forbidden_choice_rate"] == 0.0)
+        and (metadata["legacy_probability_schema_rate"] is None or metadata["legacy_probability_schema_rate"] == 0.0)
+        and (metadata["transport_error_rate"] is None or metadata["transport_error_rate"] == 0.0)
+    )
     return (
-        pd.DataFrame(response_rows),
+        responses,
         pd.DataFrame(prompt_rows),
         pd.DataFrame(condition_rows),
-        pd.DataFrame(runtime_rows),
+        runtime_frame,
         metadata,
     )
 
@@ -677,6 +809,11 @@ def state_prediction_rows(
 def parse_diagnostics(responses: pd.DataFrame, run_id: str) -> pd.DataFrame:
     rows = []
     for (condition, model_name), group in responses.groupby(["condition", "model_name"], dropna=False):
+        parse_status = group["parse_status"].fillna("").astype(str)
+        invalid_choice = group.get("invalid_choice", pd.Series(False, index=group.index)).fillna(False).astype(bool)
+        forbidden_choice = group.get("forbidden_choice", pd.Series(False, index=group.index)).fillna(False).astype(bool)
+        legacy_schema = group.get("legacy_probability_schema", pd.Series(False, index=group.index)).fillna(False).astype(bool)
+        transport_error = group.get("transport_error", pd.Series(index=group.index, dtype=object)).notna()
         rows.append(
             {
                 "run_id": run_id,
@@ -684,7 +821,11 @@ def parse_diagnostics(responses: pd.DataFrame, run_id: str) -> pd.DataFrame:
                 "baseline": condition,
                 "model_name": model_name,
                 "n": int(len(group)),
-                "parse_ok_rate": float((group["parse_status"] == "ok").mean()),
+                "parse_ok_rate": float((parse_status == "ok").mean()),
+                "invalid_choice_rate": float(invalid_choice.mean()),
+                "forbidden_choice_rate": float(forbidden_choice.mean()),
+                "legacy_probability_schema_rate": float(legacy_schema.mean()),
+                "transport_error_rate": float(transport_error.mean()),
                 "cache_hit_rate": float(group["cache_hit"].fillna(False).astype(bool).mean())
                 if "cache_hit" in group.columns and group["cache_hit"].notna().any()
                 else None,
@@ -872,7 +1013,7 @@ def write_leakage_figures(
     core = individual_metrics[
         (individual_metrics["metric_scope"] == "individual")
         & (individual_metrics["weighted"].astype(bool))
-        & individual_metrics["metric_name"].isin(["turnout_brier", "turnout_ece", "vote_accuracy", "vote_log_loss", "vote_brier_multiclass"])
+        & individual_metrics["metric_name"].isin(["turnout_accuracy_at_0_5", "turnout_ece", "vote_accuracy", "vote_macro_f1"])
     ].copy()
     agg_core = aggregate_metrics[aggregate_metrics["metric_name"].isin(["dem_2p_rmse", "margin_mae", "margin_bias", "winner_accuracy"])].copy()
     if not core.empty:
@@ -1015,6 +1156,7 @@ def write_leakage_report(
     masked_state_mae = value("masked_state", "margin_mae")
     named_vote = value("named_candidates", "vote_accuracy")
     party_vote = value("party_only_candidates", "vote_accuracy")
+    effective_per_state = llm_metadata.get("effective_agents_per_state") or cfg.get("agents_per_state", 40)
     state_prior = leakage_contrasts[
         (leakage_contrasts["contrast_name"] == "state_prior_shift")
         & (leakage_contrasts["metric_name"] == "pred_shift_vs_truth_shift")
@@ -1043,7 +1185,7 @@ def write_leakage_report(
             else "Individual vote-accuracy comparison was unavailable."
         ),
         (
-            f"Masked-state margin MAE = {masked_state_mae:.3f}; state labels still matter, but all conditions should be read with the small 40/state sample limit."
+            f"Masked-state margin MAE = {masked_state_mae:.3f}; state labels still matter, but all conditions should be read with the small {effective_per_state}/state sample limit."
             if masked_state_mae is not None
             else "Masked-state retention metric was unavailable."
         ),
@@ -1062,7 +1204,7 @@ def write_leakage_report(
     metric_summary = individual_metrics[
         (individual_metrics["metric_scope"] == "individual")
         & (individual_metrics["weighted"].astype(bool))
-        & individual_metrics["metric_name"].isin(["turnout_brier", "turnout_ece", "vote_accuracy", "vote_log_loss", "vote_brier_multiclass"])
+        & individual_metrics["metric_name"].isin(["turnout_accuracy_at_0_5", "turnout_ece", "vote_accuracy", "vote_macro_f1"])
     ].sort_values(["baseline", "metric_name"])
     agg_summary = aggregate_metrics[
         aggregate_metrics["metric_name"].isin(["dem_2p_rmse", "margin_mae", "margin_bias", "winner_accuracy", "winner_flip_count"])
@@ -1121,6 +1263,8 @@ def run_ces_leakage_benchmark(config_path: str | Path) -> dict[str, Path]:
     cfg = load_yaml(config_path)
     run_id = cfg["run_id"]
     run_dir = ensure_dir(cfg.get("paths", {}).get("run_dir", f"data/runs/{run_id}"))
+    write_yaml(cfg, run_dir / "config_snapshot.yaml")
+    started = time.time()
     paths = AggregateBenchmarkPaths(run_dir=run_dir, figures_dir=ensure_dir(run_dir / "figures"), cache_path=run_dir / "llm_cache.jsonl")
     states = list(cfg.get("states", DEFAULT_STATES))
     seed = int(cfg.get("seed", 20260426))
@@ -1167,22 +1311,6 @@ def run_ces_leakage_benchmark(config_path: str | Path) -> dict[str, Path]:
         run_id=run_id,
     )
     parse_diag = parse_diagnostics(responses, run_id)
-    runtime_log = pd.concat(
-        [
-            runtime_log,
-            pd.DataFrame(
-                [
-                    {
-                        "run_id": run_id,
-                        "event": "llm_metadata",
-                        "metadata_json": json.dumps(llm_metadata, sort_keys=True),
-                        "created_at": pd.Timestamp.now(tz="UTC"),
-                    }
-                ]
-            ),
-        ],
-        ignore_index=True,
-    )
 
     write_table(sampled_agents, run_dir / "sampled_agents.parquet")
     write_table(condition_metadata, run_dir / "condition_metadata.parquet")
@@ -1220,6 +1348,19 @@ def run_ces_leakage_benchmark(config_path: str | Path) -> dict[str, Path]:
         figures=figures,
         llm_metadata=llm_metadata,
     )
+    runtime = {
+        "run_id": run_id,
+        "git_commit": git_commit(),
+        "states": states,
+        "conditions": [name for name in cfg.get("conditions", LEAKAGE_CONDITIONS) if name in LEAKAGE_CONDITIONS],
+        "n_agents": int(len(sampled_agents)),
+        "n_prompts": int(len(prompts)),
+        "n_llm_tasks": int(len(runtime_log)),
+        "runtime_seconds": time.time() - started,
+        **llm_metadata,
+        "created_at": pd.Timestamp.now(tz="UTC").isoformat(),
+    }
+    write_json(runtime, run_dir / "runtime.json")
     return {
         "sampled_agents": run_dir / "sampled_agents.parquet",
         "condition_metadata": run_dir / "condition_metadata.parquet",
@@ -1234,5 +1375,6 @@ def run_ces_leakage_benchmark(config_path: str | Path) -> dict[str, Path]:
         "candidate_swap_diagnostics": run_dir / "candidate_swap_diagnostics.parquet",
         "parse_diagnostics": run_dir / "parse_diagnostics.parquet",
         "runtime_log": run_dir / "runtime_log.parquet",
+        "runtime": run_dir / "runtime.json",
         "report": report,
     }

@@ -15,7 +15,10 @@ from .ces_aggregate_benchmark import run_ces_aggregate_benchmark
 from .ces_ablation_benchmark import run_ces_ablation_benchmark
 from .ces_benchmark import run_ces_individual_benchmark
 from .ces_leakage_benchmark import run_ces_leakage_benchmark
+from .ces_prompt_robustness_benchmark import run_ces_prompt_robustness_benchmark
+from .ces_subgroup_calibration_benchmark import run_ces_subgroup_calibration_benchmark
 from .config import load_run_config
+from .eval_suite import run_eval_preflight, write_eval_suite_summary
 from .mit import build_mit_results as build_mit_results_pipeline
 from .mit import write_mit_processed_artifacts
 from .population import build_agents as build_agents_pipeline
@@ -189,6 +192,34 @@ def run_ces_ablation_benchmark_command(config: Path = typer.Option(..., "--confi
 @app.command("run-ces-leakage-benchmark")
 def run_ces_leakage_benchmark_command(config: Path = typer.Option(..., "--config")) -> None:
     outputs = run_ces_leakage_benchmark(config)
+    for name, path in outputs.items():
+        typer.echo(f"{name}: {path}")
+
+
+@app.command("run-ces-prompt-robustness-benchmark")
+def run_ces_prompt_robustness_benchmark_command(config: Path = typer.Option(..., "--config")) -> None:
+    outputs = run_ces_prompt_robustness_benchmark(config)
+    for name, path in outputs.items():
+        typer.echo(f"{name}: {path}")
+
+
+@app.command("run-ces-subgroup-calibration-benchmark")
+def run_ces_subgroup_calibration_benchmark_command(config: Path = typer.Option(..., "--config")) -> None:
+    outputs = run_ces_subgroup_calibration_benchmark(config)
+    for name, path in outputs.items():
+        typer.echo(f"{name}: {path}")
+
+
+@app.command("run-eval-preflight")
+def run_eval_preflight_command(config: Path = typer.Option(..., "--config")) -> None:
+    outputs = run_eval_preflight(config)
+    for name, path in outputs.items():
+        typer.echo(f"{name}: {path}")
+
+
+@app.command("write-eval-suite-summary")
+def write_eval_suite_summary_command(config: Path = typer.Option(..., "--config")) -> None:
+    outputs = write_eval_suite_summary(config)
     for name, path in outputs.items():
         typer.echo(f"{name}: {path}")
 

@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from .ces_schema import CES_MOST_LIKELY_CHOICES, CES_VOTE_PROBABILITY_CODES, format_turnout_vote_response
+from .ces_schema import CES_TURNOUT_VOTE_CHOICES, format_turnout_vote_choice_response
 from .survey_memory import is_leakage_variable
 
 
@@ -38,14 +38,14 @@ def _vote_probs_for_party(agent: pd.Series) -> dict[str, float]:
     party = str(agent.get("party_id_3") or agent.get("party_id_3_pre") or "unknown")
     ideology = str(agent.get("ideology_3") or "unknown")
     if party == "democrat":
-        return {"democrat": 0.78, "republican": 0.12, "other": 0.04, "undecided": 0.06}
+        return {"democrat": 0.78, "republican": 0.12}
     if party == "republican":
-        return {"democrat": 0.12, "republican": 0.78, "other": 0.04, "undecided": 0.06}
+        return {"democrat": 0.12, "republican": 0.78}
     if ideology == "liberal":
-        return {"democrat": 0.58, "republican": 0.24, "other": 0.08, "undecided": 0.10}
+        return {"democrat": 0.58, "republican": 0.24}
     if ideology == "conservative":
-        return {"democrat": 0.24, "republican": 0.58, "other": 0.08, "undecided": 0.10}
-    return {"democrat": 0.37, "republican": 0.37, "other": 0.08, "undecided": 0.18}
+        return {"democrat": 0.24, "republican": 0.58}
+    return {"democrat": 0.37, "republican": 0.37}
 
 
 def _turnout_for_agent(agent: pd.Series) -> float:
@@ -58,9 +58,12 @@ def _turnout_for_agent(agent: pd.Series) -> float:
 
 
 def _choice(turnout: float, vote_probs: dict[str, float]) -> str:
-    if turnout < 0.5:
-        return "not_vote"
-    return max(CES_VOTE_PROBABILITY_CODES, key=lambda code: vote_probs.get(code, 0.0))
+    turnout = float(np.clip(turnout, 0.0, 1.0))
+    total = float(vote_probs.get("democrat", 0.0)) + float(vote_probs.get("republican", 0.0))
+    dem = float(vote_probs.get("democrat", 0.0)) / total if total > 0 else 0.5
+    rep = float(vote_probs.get("republican", 0.0)) / total if total > 0 else 0.5
+    scores = {"not_vote": 1.0 - turnout, "democrat": turnout * dem, "republican": turnout * rep}
+    return max(CES_TURNOUT_VOTE_CHOICES, key=lambda code: (scores[code], -CES_TURNOUT_VOTE_CHOICES.index(code)))
 
 
 class PartyIdBaseline:
@@ -73,13 +76,7 @@ class PartyIdBaseline:
         turnout = _turnout_for_agent(agent)
         probs = _vote_probs_for_party(agent)
         choice = _choice(turnout, probs)
-        confidence = max([turnout, 1.0 - turnout, *probs.values()])
-        raw = format_turnout_vote_response(
-            turnout_probability=turnout,
-            vote_probabilities=probs,
-            most_likely_choice=choice,
-            confidence=confidence,
-        )
+        raw = format_turnout_vote_choice_response(choice)
         return CesTurnoutVotePrediction(raw_response=raw, model_name=self.model_name)
 
 
@@ -176,7 +173,7 @@ class SklearnLogitBaseline:
         return model
 
     def _fit_multiclass(self, train: pd.DataFrame, target_col: str):
-        known = train[train[target_col].isin(["democrat", "republican", "other"])].copy()
+        known = train[train[target_col].isin(["democrat", "republican"])].copy()
         if known.empty or known[target_col].nunique() < 2:
             return None
         model = self._model_pipeline()
@@ -199,14 +196,12 @@ class SklearnLogitBaseline:
     def _vote_probabilities(self, row: pd.DataFrame, agent: pd.Series) -> dict[str, float]:
         if self.vote_model is None:
             return _vote_probs_for_party(agent)
-        probs = {code: 0.0 for code in CES_VOTE_PROBABILITY_CODES}
+        probs = {code: 0.0 for code in ["democrat", "republican"]}
         classes = [str(value) for value in self.vote_model.classes_]
         pred = self.vote_model.predict_proba(self._records(row))[0]
         for klass, value in zip(classes, pred, strict=False):
             if klass in probs:
                 probs[klass] = float(value)
-        missing_mass = max(0.0, 1.0 - sum(probs.values()))
-        probs["undecided"] += missing_mass
         return probs
 
     def _batch_turnout_probabilities(self, rows: pd.DataFrame) -> np.ndarray:
@@ -223,12 +218,10 @@ class SklearnLogitBaseline:
         pred = self.vote_model.predict_proba(self._records(rows))
         out: list[dict[str, float]] = []
         for row_probs in pred:
-            probs = {code: 0.0 for code in CES_VOTE_PROBABILITY_CODES}
+            probs = {code: 0.0 for code in ["democrat", "republican"]}
             for klass, value in zip(classes, row_probs, strict=False):
                 if klass in probs:
                     probs[klass] = float(value)
-            missing_mass = max(0.0, 1.0 - sum(probs.values()))
-            probs["undecided"] += missing_mass
             out.append(probs)
         return out
 
@@ -243,15 +236,7 @@ class SklearnLogitBaseline:
         cache: dict[str, str] = {}
         for (_, row), turnout, probs in zip(rows.iterrows(), turnout_values, vote_values, strict=False):
             choice = _choice(float(turnout), probs)
-            confidence = max([float(turnout), 1.0 - float(turnout), *probs.values()])
-            if choice not in CES_MOST_LIKELY_CHOICES:
-                choice = "undecided"
-            cache[str(row["ces_id"])] = format_turnout_vote_response(
-                turnout_probability=float(np.clip(turnout, 0.0, 1.0)),
-                vote_probabilities=probs,
-                most_likely_choice=choice,
-                confidence=float(np.clip(confidence, 0.0, 1.0)),
-            )
+            cache[str(row["ces_id"])] = format_turnout_vote_choice_response(choice)
         return cache
 
     def predict(self, agent: pd.Series) -> CesTurnoutVotePrediction:
@@ -264,15 +249,7 @@ class SklearnLogitBaseline:
         turnout = self._turnout_probability(row, agent)
         probs = self._vote_probabilities(row, agent)
         choice = _choice(turnout, probs)
-        confidence = max([turnout, 1.0 - turnout, *probs.values()])
-        if choice not in CES_MOST_LIKELY_CHOICES:
-            choice = "undecided"
-        raw = format_turnout_vote_response(
-            turnout_probability=float(np.clip(turnout, 0.0, 1.0)),
-            vote_probabilities=probs,
-            most_likely_choice=choice,
-            confidence=float(np.clip(confidence, 0.0, 1.0)),
-        )
+        raw = format_turnout_vote_choice_response(choice)
         return CesTurnoutVotePrediction(raw_response=raw, model_name=self.model_name)
 
 

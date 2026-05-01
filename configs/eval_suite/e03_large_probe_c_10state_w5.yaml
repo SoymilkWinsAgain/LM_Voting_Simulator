@@ -1,0 +1,43 @@
+run_id: e03_large_probe_c_10state_w5
+seed: 20260426
+
+states: [PA, MI, WI, GA, AZ, NV, NC, MN, VA, CO]
+agents_per_state: 3
+
+prompt_variants:
+  - base_json
+  - json_strict_nonzero
+  - candidate_order_reversed
+  - interviewer_style
+  - analyst_style
+
+sampling:
+  split: test
+
+memory:
+  policy: strict_pre_no_vote_v1
+  max_memory_facts: 24
+
+model:
+  provider: ollama
+  base_url: http://172.26.48.1:11434
+  model_name: qwen3.5:2b
+  temperature: 0.0
+  max_tokens: 80
+  response_format: json
+  cache_enabled: true
+
+llm:
+  workers: 5
+  timing_responses: 20
+  max_runtime_minutes: 30
+  checkpoint_every: 25
+  gpu_sample_every: 25
+
+paths:
+  run_dir: data/runs/eval_suite_local/e03_large_probe_c_10state_w5
+  ces_respondents: data/processed/ces/2024_common_vv/ces_respondents.parquet
+  ces_targets: data/processed/ces/2024_common_vv/ces_targets.parquet
+  ces_context: data/processed/ces/2024_common_vv/ces_context.parquet
+  strict_memory_facts: data/processed/ces/2024_common_vv/ces_memory_facts.parquet
+  question_set: configs/questions/ces_2024_president_turnout_vote.yaml

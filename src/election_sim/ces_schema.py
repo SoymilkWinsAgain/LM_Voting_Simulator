@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-import math
 import re
 from typing import Any
 
 
+CES_TURNOUT_VOTE_CHOICES = ["not_vote", "democrat", "republican"]
 CES_VOTE_PROBABILITY_CODES = ["democrat", "republican", "other", "undecided"]
-CES_MOST_LIKELY_CHOICES = [*CES_VOTE_PROBABILITY_CODES, "not_vote"]
+CES_MOST_LIKELY_CHOICES = CES_TURNOUT_VOTE_CHOICES
 CES_RESPONSE_COLUMNS = [
     "turnout_probability",
     "vote_prob_democrat",
@@ -32,6 +32,8 @@ def _empty_parse(status: str) -> dict[str, Any]:
         "vote_prob_undecided": None,
         "most_likely_choice": None,
         "confidence": None,
+        "raw_choice": None,
+        "legacy_probability_schema": False,
     }
 
 
@@ -50,73 +52,65 @@ def _json_payload(raw_response: str) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _probability(value: Any) -> float | None:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(parsed) or parsed < 0.0 or parsed > 1.0:
-        return None
-    return parsed
-
-
 def parse_turnout_vote_json(raw_response: str) -> dict[str, Any]:
-    """Parse the canonical CES turnout + vote JSON schema.
+    """Parse the canonical CES turnout + vote hard-choice JSON schema.
 
-    The schema is deliberately stricter than the legacy hard-label parser:
-    malformed probabilities and invalid choices are recorded as parse failures
-    instead of being silently repaired.
+    The LLM-facing contract is deliberately a hard choice rather than a
+    probability estimate. Compatibility probability columns are one-hot system
+    derivatives used by the existing aggregation and evaluation code.
     """
 
     payload = _json_payload(raw_response)
     if payload is None:
         return _empty_parse("failed")
-    if not {"turnout_probability", "vote_probabilities", "most_likely_choice", "confidence"} <= set(payload):
+    if "vote_probabilities" in payload or "turnout_probability" in payload:
+        return _empty_parse("legacy_probability_schema") | {"legacy_probability_schema": True}
+    if set(payload) != {"choice"}:
         return _empty_parse("invalid_schema")
-    turnout = _probability(payload.get("turnout_probability"))
-    confidence = _probability(payload.get("confidence"))
-    probs = payload.get("vote_probabilities")
-    if turnout is None or confidence is None:
-        return _empty_parse("invalid_probability")
-    if not isinstance(probs, dict) or not set(CES_VOTE_PROBABILITY_CODES) <= set(probs):
-        return _empty_parse("invalid_schema")
-    parsed_probs = {code: _probability(probs.get(code)) for code in CES_VOTE_PROBABILITY_CODES}
-    if any(value is None for value in parsed_probs.values()):
-        return _empty_parse("invalid_probability")
-    total = sum(float(value) for value in parsed_probs.values())
-    if total <= 0.0:
-        return _empty_parse("invalid_probability")
-    normalized = {code: float(value) / total for code, value in parsed_probs.items()}
-    choice = payload.get("most_likely_choice")
+    choice = payload.get("choice")
     if choice not in CES_MOST_LIKELY_CHOICES:
         return _empty_parse("invalid_choice")
+    turnout = 0.0 if choice == "not_vote" else 1.0
     return {
         "parse_status": "ok",
         "turnout_probability": turnout,
-        "vote_prob_democrat": normalized["democrat"],
-        "vote_prob_republican": normalized["republican"],
-        "vote_prob_other": normalized["other"],
-        "vote_prob_undecided": normalized["undecided"],
+        "vote_prob_democrat": 1.0 if choice == "democrat" else 0.0,
+        "vote_prob_republican": 1.0 if choice == "republican" else 0.0,
+        "vote_prob_other": 0.0,
+        "vote_prob_undecided": 0.0,
         "most_likely_choice": choice,
-        "confidence": confidence,
+        "confidence": None,
+        "raw_choice": choice,
+        "legacy_probability_schema": False,
     }
 
 
-def format_turnout_vote_response(
-    *,
-    turnout_probability: float,
-    vote_probabilities: dict[str, float],
-    most_likely_choice: str,
-    confidence: float,
-) -> str:
-    """Serialize a CES turnout + vote prediction using the canonical schema."""
+def format_turnout_vote_choice_response(choice: str) -> str:
+    """Serialize a CES turnout + vote prediction using the canonical hard-choice schema."""
 
+    if choice not in CES_TURNOUT_VOTE_CHOICES:
+        raise ValueError(f"Invalid CES turnout-vote choice: {choice}")
+    return json.dumps({"choice": choice}, sort_keys=True)
+
+
+def format_turnout_vote_response(**kwargs: Any) -> str:
+    """Backward-compatible wrapper for older callers.
+
+    New CES turnout-vote code should use ``format_turnout_vote_choice_response``.
+    This wrapper converts legacy probability arguments to a hard choice.
+    """
+
+    if "choice" in kwargs:
+        return format_turnout_vote_choice_response(str(kwargs["choice"]))
+    turnout = float(kwargs.get("turnout_probability", 0.0) or 0.0)
+    probs = kwargs.get("vote_probabilities") or {}
+    scores = {
+        "not_vote": 1.0 - turnout,
+        "democrat": turnout * float(probs.get("democrat", 0.0) or 0.0),
+        "republican": turnout * float(probs.get("republican", 0.0) or 0.0),
+    }
+    choice = max(CES_TURNOUT_VOTE_CHOICES, key=lambda code: (scores[code], -CES_TURNOUT_VOTE_CHOICES.index(code)))
     return json.dumps(
-        {
-            "turnout_probability": float(turnout_probability),
-            "vote_probabilities": {code: float(vote_probabilities.get(code, 0.0)) for code in CES_VOTE_PROBABILITY_CODES},
-            "most_likely_choice": most_likely_choice,
-            "confidence": float(confidence),
-        },
+        {"choice": choice},
         sort_keys=True,
     )

@@ -24,6 +24,7 @@ from .io import ensure_dir, stable_json, write_table
 from .llm import build_llm_client
 from .mit import build_mit_results, normalize_mit_results
 from .population import agent_response_id, build_agents_from_ces_rows, build_agents_from_frames
+from .ces_schema import CES_TURNOUT_VOTE_CHOICES
 from .prompts import (
     CES_LLM_BASELINE_PROMPT_MODES,
     build_ces_prompt,
@@ -547,7 +548,7 @@ def run_ces_election_simulation(run_config_path: str | Path) -> dict[str, Path]:
                     max_memory_facts=max_memory,
                     prompt_mode=CES_LLM_BASELINE_PROMPT_MODES[baseline_name],
                 )
-                raw = llm_client.complete(prompt_text, ["democrat", "republican", "other", "undecided", "not_vote"])
+                raw = llm_client.complete(prompt_text, CES_TURNOUT_VOTE_CHOICES)
                 response_model_name = model_name
             else:
                 baseline = non_llm_baselines[baseline_name]

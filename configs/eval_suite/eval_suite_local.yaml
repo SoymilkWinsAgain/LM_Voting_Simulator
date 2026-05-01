@@ -1,0 +1,19 @@
+root_dir: data/runs/eval_suite_local
+
+experiments:
+  00_preflight: 00_preflight
+  01_individual_persona: 01_individual_persona
+  02_aggregate_accuracy: 02_aggregate_accuracy
+  03_prompt_robustness: 03_prompt_robustness
+  04_leakage: 04_leakage
+  05_ablation_placebo: 05_ablation_placebo
+  06_subgroup_calibration: 06_subgroup_calibration
+
+configs:
+  00_preflight: configs/eval_suite/preflight_local.yaml
+  01_individual_persona: configs/eval_suite/e01_individual_persona_local.yaml
+  02_aggregate_accuracy: configs/eval_suite/e02_aggregate_accuracy_local.yaml
+  03_prompt_robustness: configs/eval_suite/e03_prompt_robustness_local.yaml
+  04_leakage: configs/eval_suite/e04_leakage_local.yaml
+  05_ablation_placebo: configs/eval_suite/e05_ablation_placebo_local.yaml
+  06_subgroup_calibration: configs/eval_suite/e06_subgroup_calibration_local.yaml

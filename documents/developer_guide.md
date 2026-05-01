@@ -126,20 +126,11 @@ All CES `president_turnout_vote` predictions must parse through
 Expected JSON:
 
 ```json
-{
-  "turnout_probability": 0.86,
-  "vote_probabilities": {
-    "democrat": 0.45,
-    "republican": 0.45,
-    "other": 0.05,
-    "undecided": 0.05
-  },
-  "most_likely_choice": "democrat",
-  "confidence": 0.7
-}
+{"choice": "not_vote|democrat|republican"}
 ```
 
-`responses.parquet` keeps raw model output plus normalized columns:
+LLMs and CES non-LLM baselines must emit only the hard choice. `responses.parquet`
+keeps raw model output plus compatibility columns derived by the system:
 
 ```text
 turnout_probability
@@ -151,6 +142,10 @@ most_likely_choice
 confidence
 parse_status
 ```
+
+`turnout_probability` and `vote_prob_*` are one-hot derivatives of `choice`, not
+model-written probabilities. `confidence` is retained for table compatibility
+and is `null` for this task.
 
 Do not add a second CES parser for the same task. Extend the shared schema if
 the task contract changes.

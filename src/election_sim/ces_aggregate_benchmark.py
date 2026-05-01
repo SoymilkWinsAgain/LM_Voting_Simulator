@@ -21,17 +21,21 @@ from .ces_benchmark import (
     SklearnLogitBenchmarkBaseline,
     _agents_from_cohort,
     _canonical_raw,
+    _git_commit,
+    _gpu_peak_summary,
+    _gpu_snapshot,
     _group_context,
     _group_memory_facts,
     _post_hoc_oracle_raw,
+    _raw_choice_diagnostics,
     _response_rows,
     _target_wide,
     build_benchmark_cohort,
     crossfit_partitions,
 )
-from .ces_schema import parse_turnout_vote_json
+from .ces_schema import CES_TURNOUT_VOTE_CHOICES, parse_turnout_vote_json
 from .config import ModelConfig
-from .io import ensure_dir, load_yaml, stable_json, write_table
+from .io import ensure_dir, load_yaml, stable_json, write_json, write_table
 from .llm import build_llm_client
 from .transforms import stable_hash
 
@@ -485,7 +489,7 @@ def complete_llm_task_with_cache(
     if cached is not None:
         return str(cached["raw_response"]), True, cached.get("latency_ms")
     started = time.time()
-    raw = client.complete(prompt_text, ["democrat", "republican", "other", "undecided", "not_vote"])
+    raw = client.complete(prompt_text, CES_TURNOUT_VOTE_CHOICES)
     latency_ms = int((time.time() - started) * 1000)
     cache.set(
         {
@@ -555,20 +559,15 @@ def _fast_ces_prompt(
         [
             "",
             "Task:",
-            "Estimate this voter's turnout probability and presidential vote choice.",
+            "Choose the single election behavior this voter would most likely take.",
+            "",
+            "Allowed choices:",
+            "- not_vote: does not vote",
+            "- democrat: votes for the Democratic candidate",
+            "- republican: votes for the Republican candidate",
             "",
             "Return JSON only with this schema:",
-            "{",
-            '  "turnout_probability": 0.0,',
-            '  "vote_probabilities": {',
-            '    "democrat": 0.0,',
-            '    "republican": 0.0,',
-            '    "other": 0.0,',
-            '    "undecided": 0.0',
-            "  },",
-            '  "most_likely_choice": "democrat|republican|other|undecided|not_vote",',
-            '  "confidence": 0.0',
-            "}",
+            '{"choice": "not_vote|democrat|republican"}',
         ]
     )
     _ = question
@@ -683,12 +682,23 @@ def _run_llm_predictions(
     max_runtime_hours = float(llm_cfg.get("max_runtime_hours", 4.0))
     min_sample_size = int(llm_cfg.get("min_sample_size", min(cfg.get("sample_sizes", DEFAULT_SAMPLE_SIZES))))
     workers = max(1, int(llm_cfg.get("workers", 1)))
+    checkpoint_every = max(1, int(llm_cfg.get("checkpoint_every", 25)))
+    gpu_sample_every = max(1, int(llm_cfg.get("gpu_sample_every", checkpoint_every)))
     baseline_names = [name for name in cfg.get("baselines", {}).get("llm", LLM_BASELINES) if name in LLM_BASELINES]
+    if not baseline_names:
+        return [], pd.DataFrame(columns=PROMPT_COLUMNS), [], {
+            "llm_enabled": False,
+            "workers": workers,
+            "n_full_tasks": 0,
+            "n_selected_tasks": 0,
+        }
     ordered_agents = agents.sort_values(["sample_rank", "state_po", "base_ces_id"]).copy()
     timing_agent_count = min(len(ordered_agents), max(1, int(np.ceil(timing_responses / max(1, len(baseline_names))))))
     strict_memory = _group_memory_facts(strict_memory_facts)
     poll_memory = _group_memory_facts(poll_memory_facts)
     context_by_id = _group_context(context)
+    llm_started = time.time()
+    gpu_snapshots = [_gpu_snapshot("llm_start")]
     timing_tasks = _build_llm_tasks(
         cfg=cfg,
         agents=ordered_agents.head(timing_agent_count),
@@ -704,15 +714,13 @@ def _run_llm_predictions(
     runtime_rows: list[dict[str, Any]] = []
     observed_latencies: list[float] = []
     uncached_timing = 0
-    for task in timing_tasks:
-        if uncached_timing >= timing_responses:
-            break
-        cached = cache.get(task["cache_key"])
-        if cached is not None:
-            if cached.get("latency_ms") is not None:
-                observed_latencies.append(float(cached["latency_ms"]) / 1000.0)
-            raw, cache_hit, latency_ms = str(cached["raw_response"]), True, cached.get("latency_ms")
-        else:
+
+    def finish_task(task: dict[str, Any]) -> tuple[dict[str, Any], str, bool, int | None, str | None]:
+        result = result_by_key.get(task["cache_key"])
+        if result is not None:
+            return task, str(result["raw"]), bool(result["cache_hit"]), result.get("latency_ms"), result.get("transport_error")
+        started = time.time()
+        try:
             raw, cache_hit, latency_ms = complete_llm_task_with_cache(
                 client=client,
                 cache=cache,
@@ -723,20 +731,68 @@ def _run_llm_predictions(
                 prompt_hash=task["prompt_hash"],
                 prompt_text=task["prompt_text"],
             )
+            return task, raw, cache_hit, latency_ms, None
+        except Exception as exc:
+            latency_ms = int((time.time() - started) * 1000)
+            return task, "", False, latency_ms, f"{type(exc).__name__}: {exc}"
+
+    def runtime_row(
+        *,
+        event: str,
+        task: dict[str, Any],
+        raw: str,
+        cache_hit: bool,
+        latency_ms: int | None,
+        transport_error: str | None,
+    ) -> dict[str, Any]:
+        parsed = parse_turnout_vote_json(raw)
+        parse_status = "transport_error" if transport_error else parsed["parse_status"]
+        raw_diag = _raw_choice_diagnostics(raw)
+        return {
+            "run_id": cfg["run_id"],
+            "event": event,
+            "prompt_id": task.get("prompt_id"),
+            "agent_id": task.get("agent_id"),
+            "baseline": task["baseline"],
+            "model_name": model_name,
+            "base_ces_id": task["base_ces_id"],
+            "state_po": task.get("state_po"),
+            "sample_rank": task.get("sample_rank"),
+            "cache_hit": cache_hit,
+            "latency_ms": latency_ms,
+            "parse_status": parse_status,
+            "raw_choice": raw_diag["raw_choice"],
+            "invalid_choice": bool(raw_diag["invalid_choice"] or parse_status == "invalid_choice"),
+            "forbidden_choice": bool(raw_diag["forbidden_choice"]),
+            "legacy_probability_schema": bool(raw_diag["legacy_probability_schema"] or parsed.get("legacy_probability_schema")),
+            "transport_error": transport_error,
+            "created_at": pd.Timestamp.now(tz="UTC"),
+        }
+
+    for task in timing_tasks:
+        if uncached_timing >= timing_responses:
+            break
+        cached_before = cache.get(task["cache_key"]) is not None
+        task, raw, cache_hit, latency_ms, transport_error = finish_task(task)
+        if not cached_before:
             uncached_timing += 1
-            if latency_ms is not None:
-                observed_latencies.append(float(latency_ms) / 1000.0)
-        result_by_key[task["cache_key"]] = {"raw": raw, "cache_hit": cache_hit, "latency_ms": latency_ms}
+        if latency_ms is not None:
+            observed_latencies.append(float(latency_ms) / 1000.0)
+        result_by_key[task["cache_key"]] = {
+            "raw": raw,
+            "cache_hit": cache_hit,
+            "latency_ms": latency_ms,
+            "transport_error": transport_error,
+        }
         runtime_rows.append(
-            {
-                "run_id": cfg["run_id"],
-                "event": "llm_timing",
-                "baseline": task["baseline"],
-                "base_ces_id": task["base_ces_id"],
-                "cache_hit": cache_hit,
-                "latency_ms": latency_ms,
-                "created_at": pd.Timestamp.now(tz="UTC"),
-            }
+            runtime_row(
+                event="llm_timing",
+                task=task,
+                raw=raw,
+                cache_hit=cache_hit,
+                latency_ms=latency_ms,
+                transport_error=transport_error,
+            )
         )
 
     median_latency = statistics.median(observed_latencies) if observed_latencies else 0.0
@@ -773,37 +829,46 @@ def _run_llm_predictions(
     pred_rows = []
     cache_hits = 0
     ollama_calls = 0
+    processed = 0
 
-    def finish_task(task: dict[str, Any]) -> tuple[dict[str, Any], str, bool, int | None]:
-        result = result_by_key.get(task["cache_key"])
-        if result is None:
-            raw, cache_hit, latency_ms = complete_llm_task_with_cache(
-                client=client,
-                cache=cache,
-                cache_key=task["cache_key"],
-                run_id=cfg["run_id"],
-                model_name=model_name,
-                baseline=task["baseline"],
-                prompt_hash=task["prompt_hash"],
-                prompt_text=task["prompt_text"],
+    def partial_response_rows() -> list[dict[str, Any]]:
+        if not pred_rows:
+            return []
+        rows: list[dict[str, Any]] = []
+        pred_df = pd.DataFrame(pred_rows)
+        for baseline, group in pred_df.groupby("baseline", sort=False):
+            prompt_by_id = {
+                str(row["ces_id"]): {
+                    "prompt_id": row["prompt_id"],
+                    "cache_hit": bool(row["cache_hit"]),
+                    "latency_ms": row["latency_ms"],
+                }
+                for _, row in group.iterrows()
+            }
+            rows.extend(
+                _make_response_rows(
+                    run_id=cfg["run_id"],
+                    baseline=baseline,
+                    predictions=group[["ces_id", "raw_response", "model_name"]],
+                    sampled=sampled,
+                    agents=agents,
+                    is_llm=True,
+                    prompt_by_id=prompt_by_id,
+                )
             )
-        else:
-            raw = result["raw"]
-            cache_hit = bool(result["cache_hit"])
-            latency_ms = result["latency_ms"]
-        return task, raw, cache_hit, latency_ms
+        return rows
 
-    if workers == 1:
-        completed = [finish_task(task) for task in selected_tasks]
-    else:
-        completed = []
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            future_to_task = {executor.submit(finish_task, task): task for task in selected_tasks}
-            for future in as_completed(future_to_task):
-                completed.append(future.result())
-    completed.sort(key=lambda item: (item[0]["sample_rank"], item[0]["state_po"], item[0]["base_ces_id"], item[0]["baseline"]))
+    def write_checkpoint() -> None:
+        if prompt_rows:
+            write_table(pd.DataFrame(prompt_rows), paths.run_dir / "prompts.partial.parquet")
+        partial_rows = partial_response_rows()
+        if partial_rows:
+            write_table(pd.DataFrame(partial_rows), paths.run_dir / "responses.partial.parquet")
+        if runtime_rows:
+            write_table(pd.DataFrame(runtime_rows), paths.run_dir / "runtime_log.partial.parquet")
 
-    for task, raw, cache_hit, latency_ms in completed:
+    def record_completed(task: dict[str, Any], raw: str, cache_hit: bool, latency_ms: int | None, transport_error: str | None) -> None:
+        nonlocal cache_hits, ollama_calls, processed
         cache_hits += int(cache_hit)
         ollama_calls += int(not cache_hit)
         prompt_rows.append(
@@ -834,16 +899,35 @@ def _run_llm_predictions(
             }
         )
         runtime_rows.append(
-            {
-                "run_id": cfg["run_id"],
-                "event": "llm_response",
-                "baseline": task["baseline"],
-                "base_ces_id": task["base_ces_id"],
-                "cache_hit": cache_hit,
-                "latency_ms": latency_ms,
-                "created_at": pd.Timestamp.now(tz="UTC"),
-            }
+            runtime_row(
+                event="llm_response",
+                task=task,
+                raw=raw,
+                cache_hit=cache_hit,
+                latency_ms=latency_ms,
+                transport_error=transport_error,
+            )
         )
+        processed += 1
+        if processed % gpu_sample_every == 0:
+            gpu_snapshots.append(_gpu_snapshot(f"llm_after_response_{processed}"))
+        if processed % checkpoint_every == 0:
+            write_checkpoint()
+
+    if workers == 1:
+        for task in selected_tasks:
+            record_completed(*finish_task(task))
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_task = {executor.submit(finish_task, task): task for task in selected_tasks}
+            for future in as_completed(future_to_task):
+                record_completed(*future.result())
+    gpu_snapshots.append(_gpu_snapshot("llm_end"))
+    write_checkpoint()
+    sort_key = lambda row: (int(row.get("sample_rank", 10**9) or 10**9), str(row.get("state_po", "")), str(row.get("base_ces_id", "")), str(row.get("baseline", "")))
+    prompt_rows.sort(key=sort_key)
+    pred_rows.sort(key=lambda row: (str(row.get("baseline", "")), str(row.get("ces_id", ""))))
+    runtime_rows.sort(key=lambda row: (str(row.get("event", "")), int(row.get("sample_rank", 10**9) or 10**9), str(row.get("state_po", "")), str(row.get("base_ces_id", "")), str(row.get("baseline", ""))))
 
     response_rows: list[dict[str, Any]] = []
     if pred_rows:
@@ -868,6 +952,20 @@ def _run_llm_predictions(
                     prompt_by_id=prompt_by_id,
                 )
             )
+    llm_runtime_seconds = time.time() - llm_started
+    runtime_df = pd.DataFrame(runtime_rows)
+    response_runtime = runtime_df[runtime_df.get("event", pd.Series(dtype=str)) == "llm_response"].copy() if not runtime_df.empty else pd.DataFrame()
+    latency = pd.to_numeric(response_runtime.get("latency_ms", pd.Series(dtype=float)), errors="coerce").dropna()
+    parse_status = response_runtime.get("parse_status", pd.Series(dtype=str)).fillna("").astype(str) if not response_runtime.empty else pd.Series(dtype=str)
+    invalid_choice = response_runtime.get("invalid_choice", pd.Series(dtype=bool)).fillna(False).astype(bool) if not response_runtime.empty else pd.Series(dtype=bool)
+    forbidden_choice = response_runtime.get("forbidden_choice", pd.Series(dtype=bool)).fillna(False).astype(bool) if not response_runtime.empty else pd.Series(dtype=bool)
+    legacy_schema = response_runtime.get("legacy_probability_schema", pd.Series(dtype=bool)).fillna(False).astype(bool) if not response_runtime.empty else pd.Series(dtype=bool)
+    transport_errors = response_runtime.get("transport_error", pd.Series(dtype=object)).notna() if not response_runtime.empty else pd.Series(dtype=bool)
+    parse_ok_rate = float((parse_status == "ok").mean()) if len(parse_status) else None
+    invalid_choice_rate = float(invalid_choice.mean()) if len(invalid_choice) else None
+    forbidden_choice_rate = float(forbidden_choice.mean()) if len(forbidden_choice) else None
+    legacy_schema_rate = float(legacy_schema.mean()) if len(legacy_schema) else None
+    transport_error_rate = float(transport_errors.mean()) if len(transport_errors) else None
     metadata = {
         "llm_enabled": selected_task_count > 0,
         "pilot_limited": pilot_limited,
@@ -884,6 +982,23 @@ def _run_llm_predictions(
         "cache_hits": cache_hits,
         "ollama_calls": ollama_calls,
         "cache_hit_rate": cache_hits / selected_task_count if selected_task_count else None,
+        "llm_runtime_seconds": llm_runtime_seconds,
+        "p90_latency_seconds": float(latency.quantile(0.9) / 1000.0) if not latency.empty else None,
+        "throughput_responses_per_second": float(selected_task_count / llm_runtime_seconds) if llm_runtime_seconds > 0 else None,
+        "parse_ok_rate": parse_ok_rate,
+        "invalid_choice_rate": invalid_choice_rate,
+        "forbidden_choice_rate": forbidden_choice_rate,
+        "legacy_probability_schema_rate": legacy_schema_rate,
+        "transport_error_rate": transport_error_rate,
+        "all_gates_passed": bool(
+            (parse_ok_rate is None or parse_ok_rate >= 0.95)
+            and (invalid_choice_rate is None or invalid_choice_rate <= 0.02)
+            and (forbidden_choice_rate is None or forbidden_choice_rate == 0.0)
+            and (legacy_schema_rate is None or legacy_schema_rate == 0.0)
+            and (transport_error_rate is None or transport_error_rate == 0.0)
+        ),
+        "gpu_snapshots": gpu_snapshots,
+        **_gpu_peak_summary(gpu_snapshots),
     }
     return response_rows, pd.DataFrame(prompt_rows, columns=PROMPT_COLUMNS), runtime_rows, metadata
 
@@ -1262,6 +1377,7 @@ def write_aggregate_benchmark_report(
         "- `responses.parquet`, `prompts.parquet`",
         "- `state_predictions.parquet`, `aggregate_metrics.parquet`",
         "- `parse_diagnostics.parquet`, `runtime_log.parquet`",
+        "- `runtime.json`, `llm_cache.jsonl`",
         "- `figures/*.png`, `figures/*.svg`",
         "",
     ]
@@ -1271,6 +1387,7 @@ def write_aggregate_benchmark_report(
 
 
 def run_ces_aggregate_benchmark(config_path: str | Path) -> dict[str, Path]:
+    run_started = time.time()
     cfg = load_yaml(config_path)
     run_id = cfg["run_id"]
     run_dir = ensure_dir(cfg.get("paths", {}).get("run_dir", f"data/runs/{run_id}"))
@@ -1278,6 +1395,7 @@ def run_ces_aggregate_benchmark(config_path: str | Path) -> dict[str, Path]:
     states = list(cfg.get("states", DEFAULT_SWING_STATES))
     sample_sizes = sorted(int(size) for size in cfg.get("sample_sizes", DEFAULT_SAMPLE_SIZES))
     seed = int(cfg.get("seed", 20260426))
+    gpu_snapshots = [_gpu_snapshot("run_start")]
 
     respondents = pd.read_parquet(cfg["paths"]["ces_respondents"])
     answers = pd.read_parquet(cfg["paths"]["ces_answers"])
@@ -1401,6 +1519,43 @@ def run_ces_aggregate_benchmark(config_path: str | Path) -> dict[str, Path]:
         llm_metadata=llm_metadata,
         calibration_notes=calibration_notes,
     )
+    gpu_snapshots.extend(llm_metadata.get("gpu_snapshots", []))
+    gpu_snapshots.append(_gpu_snapshot("run_end"))
+    runtime_seconds = time.time() - run_started
+    response_runtime = runtime_log[runtime_log.get("event", pd.Series(dtype=str)) == "llm_response"].copy() if not runtime_log.empty else pd.DataFrame()
+    latency = pd.to_numeric(response_runtime.get("latency_ms", pd.Series(dtype=float)), errors="coerce").dropna()
+    runtime = {
+        "run_id": run_id,
+        "git_commit": _git_commit(),
+        "model_name": cfg.get("model", {}).get("model_name"),
+        "provider": cfg.get("model", {}).get("provider"),
+        "temperature": cfg.get("model", {}).get("temperature"),
+        "max_tokens": cfg.get("model", {}).get("max_tokens"),
+        "workers": llm_metadata.get("workers"),
+        "states": states,
+        "sample_sizes": sample_sizes,
+        "effective_llm_sample_size": llm_metadata.get("effective_llm_sample_size"),
+        "n_sampled_agents": int(len(sampled)),
+        "n_llm_tasks": int(llm_metadata.get("n_selected_tasks", 0)),
+        "runtime_seconds": runtime_seconds,
+        "llm_runtime_seconds": llm_metadata.get("llm_runtime_seconds"),
+        "median_latency_seconds": float(latency.median() / 1000.0) if not latency.empty else llm_metadata.get("median_latency_seconds"),
+        "p90_latency_seconds": float(latency.quantile(0.9) / 1000.0) if not latency.empty else llm_metadata.get("p90_latency_seconds"),
+        "throughput_responses_per_second": llm_metadata.get("throughput_responses_per_second"),
+        "cache_hit_rate": llm_metadata.get("cache_hit_rate"),
+        "ollama_calls": int(llm_metadata.get("ollama_calls", 0)),
+        "parse_ok_rate": llm_metadata.get("parse_ok_rate"),
+        "invalid_choice_rate": llm_metadata.get("invalid_choice_rate"),
+        "forbidden_choice_rate": llm_metadata.get("forbidden_choice_rate"),
+        "legacy_probability_schema_rate": llm_metadata.get("legacy_probability_schema_rate"),
+        "transport_error_rate": llm_metadata.get("transport_error_rate"),
+        "all_gates_passed": bool(llm_metadata.get("all_gates_passed", True)),
+        **_gpu_peak_summary(gpu_snapshots),
+        "gpu_snapshots": gpu_snapshots,
+        "input_artifact_paths": {key: str(value) for key, value in cfg.get("paths", {}).items()},
+        "created_at": pd.Timestamp.now(tz="UTC").isoformat(),
+    }
+    write_json(runtime, run_dir / "runtime.json")
     return {
         "sampled_agents": run_dir / "sampled_agents.parquet",
         "sample_membership": run_dir / "sample_membership.parquet",
@@ -1410,5 +1565,6 @@ def run_ces_aggregate_benchmark(config_path: str | Path) -> dict[str, Path]:
         "aggregate_metrics": run_dir / "aggregate_metrics.parquet",
         "parse_diagnostics": run_dir / "parse_diagnostics.parquet",
         "runtime_log": run_dir / "runtime_log.parquet",
+        "runtime": run_dir / "runtime.json",
         "report": report,
     }

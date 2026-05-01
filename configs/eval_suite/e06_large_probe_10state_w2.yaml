@@ -1,0 +1,15 @@
+run_id: e06_large_probe_10state_w2
+seed: 20260426
+mode: ces_subgroup_calibration_benchmark
+
+small_n_threshold: 30
+workers: 2
+
+paths:
+  run_dir: data/runs/eval_suite_local/e06_large_probe_10state_w2
+  root_dir: data/runs/eval_suite_local
+  e01_run_dir: data/runs/eval_suite_local/01_individual_persona_large_10state_1000
+  e05_run_dir: data/runs/eval_suite_local/05_ablation_placebo_large_10state_full_ladder_600
+  e02_run_dir: data/runs/eval_suite_local/02_aggregate_accuracy_large_10state_500
+  e04_run_dir: data/runs/eval_suite_local/04_leakage_large_10state_70
+  ces_targets: data/processed/ces/2024_common_vv/ces_targets.parquet

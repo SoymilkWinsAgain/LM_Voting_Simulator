@@ -20,6 +20,7 @@ from election_sim.ces_aggregate_benchmark import (
     uniform_national_swing_from_2020_predictions,
 )
 from election_sim.ces_ablation_benchmark import (
+    ablation_delta_rows,
     build_memory_donor_map,
     choose_effective_agents_per_state,
     render_ablation_prompt,
@@ -33,6 +34,8 @@ from election_sim.ces_leakage_benchmark import (
     run_ces_leakage_benchmark,
     state_swap_diagnostics,
 )
+from election_sim.ces_prompt_robustness_benchmark import run_ces_prompt_robustness_benchmark
+from election_sim.ces_subgroup_calibration_benchmark import run_ces_subgroup_calibration_benchmark
 from election_sim.ces_benchmark import (
     _baseline_factory,
     _post_hoc_oracle_raw,
@@ -45,7 +48,7 @@ from election_sim.ces_benchmark import (
     multiclass_brier,
     run_ces_individual_benchmark,
 )
-from election_sim.ces_schema import format_turnout_vote_response
+from election_sim.ces_schema import format_turnout_vote_choice_response
 from election_sim.ces import build_ces, build_ces_cells, build_ces_memory_cards
 from election_sim.ces_anes_persona import (
     PERSONA_MEMORY_POLICY,
@@ -57,6 +60,7 @@ from election_sim.ces_anes_persona import (
 )
 from election_sim.config import RunConfig, load_cell_schema, load_run_config
 from election_sim.evaluation import election_metrics, individual_turnout_vote_metrics, turnout_vote_election_metrics
+from election_sim.eval_suite import run_eval_preflight, write_eval_suite_summary
 from election_sim.gdelt import load_context_cards, select_context_cards
 from election_sim.io import load_yaml
 from election_sim.mit import normalize_mit_results, state_truth_table, write_mit_processed_artifacts
@@ -489,45 +493,30 @@ def test_ces_poll_informed_policy_marks_poll_prior(tmp_path):
 
 
 def test_turnout_vote_parser_and_aggregation():
-    parsed = parse_turnout_vote_json(
-        json.dumps(
-            {
-                "turnout_probability": 0.8,
-                "vote_probabilities": {"democrat": 0.7, "republican": 0.2, "other": 0.05, "undecided": 0.05},
-                "most_likely_choice": "democrat",
-                "confidence": 0.9,
-            }
-        )
-    )
+    parsed = parse_turnout_vote_json('{"choice": "democrat"}')
     assert parsed["parse_status"] == "ok"
     assert parsed["most_likely_choice"] == "democrat"
+    assert parsed["turnout_probability"] == 1.0
+    assert parsed["vote_prob_democrat"] == 1.0
+    assert parsed["vote_prob_republican"] == 0.0
+    assert parsed["vote_prob_other"] == 0.0
+    assert parsed["vote_prob_undecided"] == 0.0
+    assert parse_turnout_vote_json('{"choice": "republican"}')["parse_status"] == "ok"
+    assert parse_turnout_vote_json('{"choice": "not_vote"}')["turnout_probability"] == 0.0
     assert parse_turnout_vote_json('{"answer": "democrat"}')["parse_status"] == "invalid_schema"
-    assert (
-        parse_turnout_vote_json(
-            json.dumps(
-                {
-                    "turnout_probability": 1.2,
-                    "vote_probabilities": {"democrat": 0.7, "republican": 0.2, "other": 0.05, "undecided": 0.05},
-                    "most_likely_choice": "democrat",
-                    "confidence": 0.9,
-                }
-            )
-        )["parse_status"]
-        == "invalid_probability"
-    )
     assert (
         parse_turnout_vote_json(
             json.dumps(
                 {
                     "turnout_probability": 0.8,
                     "vote_probabilities": {"democrat": 0.7, "republican": 0.2, "other": 0.05, "undecided": 0.05},
-                    "most_likely_choice": "green",
-                    "confidence": 0.9,
                 }
             )
         )["parse_status"]
-        == "invalid_choice"
+        == "legacy_probability_schema"
     )
+    assert parse_turnout_vote_json('{"choice": "other"}')["parse_status"] == "invalid_choice"
+    assert parse_turnout_vote_json('{"choice": "undecided"}')["parse_status"] == "invalid_choice"
 
     agents = pd.DataFrame(
         [
@@ -818,7 +807,15 @@ def test_ces_individual_benchmark_runner_smoke(tmp_path):
                 "  states: all",
                 "baselines:",
                 "  non_llm: [majority_by_state]",
-                "  llm: []",
+                "  llm: [ces_demographic_only_llm]",
+                "llm_pilot:",
+                "  max_respondents: 2",
+                "  per_state_target: 2",
+                "  workers: 2",
+                "  checkpoint_every: 1",
+                "  gpu_sample_every: 1",
+                "memory:",
+                "  max_memory_facts: 4",
                 "model:",
                 "  provider: mock",
                 "paths:",
@@ -837,9 +834,13 @@ def test_ces_individual_benchmark_runner_smoke(tmp_path):
     )
     outputs = run_ces_individual_benchmark(run_config)
     assert outputs["report"].exists()
+    assert outputs["runtime_log"].exists()
+    assert outputs["runtime"].exists()
     responses = pd.read_parquet(outputs["responses"])
     assert not responses.empty
     assert set(responses["parse_status"]) == {"ok"}
+    runtime_log = pd.read_parquet(outputs["runtime_log"])
+    assert {"latency_ms", "cache_hit", "parse_status", "raw_choice", "legacy_probability_schema"} <= set(runtime_log.columns)
 
 
 def test_ces_aggregate_nested_sampling_is_deterministic_and_nested():
@@ -965,12 +966,7 @@ def test_ces_aggregate_llm_cache_avoids_duplicate_calls(tmp_path):
 
         def complete(self, prompt_text, allowed):
             self.count += 1
-            return format_turnout_vote_response(
-                turnout_probability=0.9,
-                vote_probabilities={"democrat": 0.7, "republican": 0.2, "other": 0.05, "undecided": 0.05},
-                most_likely_choice="democrat",
-                confidence=0.8,
-            )
+            return format_turnout_vote_choice_response("democrat")
 
     cache = AggregateLlmCache(tmp_path / "cache.jsonl")
     client = CountingClient()
@@ -1064,10 +1060,14 @@ def test_ces_aggregate_benchmark_runner_smoke(tmp_path):
     )
     outputs = run_ces_aggregate_benchmark(run_config)
     assert outputs["report"].exists()
+    assert outputs["runtime"].exists()
+    assert outputs["runtime_log"].exists()
     predictions = pd.read_parquet(outputs["state_predictions"])
     assert {"mit_2020_state_prior", "uniform_national_swing_from_2020", "ces_post_self_report_aggregate_oracle"} <= set(predictions["baseline"])
     responses = pd.read_parquet(outputs["responses"])
     assert responses[responses["baseline"] == "ces_post_self_report_aggregate_oracle"]["parse_status"].eq("ok").all()
+    runtime_log = pd.read_parquet(outputs["runtime_log"])
+    assert {"latency_ms", "cache_hit", "parse_status", "raw_choice", "legacy_probability_schema"} <= set(runtime_log.columns)
     assert any((tmp_path / "run" / "figures").glob("*.png"))
 
 
@@ -1187,6 +1187,51 @@ def test_ces_ablation_memory_donor_and_runtime_gate():
     assert projected is not None
 
 
+def test_ces_ablation_delta_rows_include_full_ladder_and_aggregate():
+    rows = []
+    baselines = [
+        "L1_demographic_only_llm",
+        "L2_demographic_state_llm",
+        "L3_party_ideology_llm",
+        "L4_party_ideology_context_llm",
+        "L5_strict_memory_llm",
+        "L6_strict_memory_context_llm",
+        "L7_poll_informed_memory_context_llm",
+        "L8_post_hoc_oracle_memory_context_llm",
+        "P1_memory_shuffled_within_state_llm",
+        "P2_memory_shuffled_within_party_llm",
+    ]
+    for idx, baseline in enumerate(baselines):
+        rows.append(
+            {
+                "metric_scope": "individual_main",
+                "weighted": True,
+                "baseline": baseline,
+                "metric_name": "vote_accuracy",
+                "metric_value": idx / 10,
+            }
+        )
+    aggregate = pd.DataFrame(
+        [
+            {"baseline": baseline, "metric_name": "margin_mae", "metric_value": idx / 20}
+            for idx, baseline in enumerate(baselines)
+        ]
+    )
+    deltas = ablation_delta_rows(pd.DataFrame(rows), "r", aggregate)
+    delta_names = set(deltas["delta_name"])
+    assert {
+        "state_increment",
+        "strict_memory_increment",
+        "strict_context_increment",
+        "oracle_gap_from_strict",
+        "oracle_gap_from_poll",
+        "state_placebo_gap",
+        "party_placebo_gap",
+    } <= delta_names
+    assert {"individual_main", "aggregate"} <= set(deltas["metric_scope"])
+    assert "margin_mae" in set(deltas["metric_name"])
+
+
 def test_ces_ablation_benchmark_runner_smoke(tmp_path):
     config_path = _write_tiny_ces_fixture(tmp_path)
     ces_paths = build_ces(
@@ -1256,11 +1301,151 @@ def test_ces_ablation_benchmark_runner_smoke(tmp_path):
     )
     outputs = run_ces_ablation_benchmark(run_config)
     assert outputs["report"].exists()
+    assert outputs["runtime"].exists()
+    assert outputs["runtime_log"].exists()
     responses = pd.read_parquet(outputs["responses"])
     assert set(responses["baseline"]) >= {"L1_demographic_only_llm", "L8_post_hoc_oracle_memory_context_llm"}
     assert responses["parse_status"].eq("ok").all()
+    deltas = pd.read_parquet(outputs["ablation_deltas"])
+    assert {"individual_main", "aggregate"} <= set(deltas["metric_scope"])
+    assert "oracle_gap_from_strict" in set(deltas["delta_name"])
     assert pd.read_parquet(outputs["memory_placebo_diagnostics"]).shape[0] >= 1
+    runtime_log = pd.read_parquet(outputs["runtime_log"])
+    assert {
+        "latency_ms",
+        "cache_hit",
+        "parse_status",
+        "raw_choice",
+        "legacy_probability_schema",
+        "transport_error",
+    } <= set(runtime_log.columns)
     assert any((tmp_path / "run" / "figures").glob("*.png"))
+
+
+def test_ces_subgroup_calibration_benchmark_runner_smoke(tmp_path):
+    targets = pd.DataFrame(
+        [
+            {"ces_id": "101", "target_id": "turnout_2024_self_report", "canonical_value": "voted"},
+            {"ces_id": "101", "target_id": "president_vote_2024", "canonical_value": "democrat"},
+            {"ces_id": "102", "target_id": "turnout_2024_self_report", "canonical_value": "voted"},
+            {"ces_id": "102", "target_id": "president_vote_2024", "canonical_value": "republican"},
+            {"ces_id": "103", "target_id": "turnout_2024_self_report", "canonical_value": "not_voted"},
+            {"ces_id": "103", "target_id": "president_vote_2024", "canonical_value": "not_vote"},
+        ]
+    )
+    targets_path = tmp_path / "targets.parquet"
+    targets.to_parquet(targets_path, index=False)
+    agents = pd.DataFrame(
+        [
+            {
+                "base_ces_id": "101",
+                "state_po": "PA",
+                "party_id_3": "democrat",
+                "party_id_7": "Strong Democrat",
+                "ideology_3": "liberal",
+                "race_ethnicity": "white",
+                "education_binary": "college_plus",
+                "age_group": "30_44",
+                "gender": "female",
+                "sample_weight": 1.0,
+            },
+            {
+                "base_ces_id": "102",
+                "state_po": "PA",
+                "party_id_3": "republican",
+                "party_id_7": "Strong Republican",
+                "ideology_3": "conservative",
+                "race_ethnicity": "white",
+                "education_binary": "non_college",
+                "age_group": "45_64",
+                "gender": "male",
+                "sample_weight": 2.0,
+            },
+            {
+                "base_ces_id": "103",
+                "state_po": "GA",
+                "party_id_3": "independent_or_other",
+                "party_id_7": "Independent",
+                "ideology_3": "moderate",
+                "race_ethnicity": "black",
+                "education_binary": "non_college",
+                "age_group": "65_plus",
+                "gender": "female",
+                "sample_weight": 1.5,
+            },
+        ]
+    )
+
+    def response_rows(run_id: str, baseline: str) -> pd.DataFrame:
+        choices = [("101", "democrat"), ("102", "republican"), ("103", "not_vote")]
+        rows = []
+        for idx, (ces_id, choice) in enumerate(choices, start=1):
+            rows.append(
+                {
+                    "run_id": run_id,
+                    "response_id": f"{run_id}_{idx}",
+                    "agent_id": f"a{idx}",
+                    "base_ces_id": ces_id,
+                    "baseline": baseline,
+                    "model_name": "mock-voter-v1",
+                    "raw_response": format_turnout_vote_choice_response(choice),
+                    "parse_status": "ok",
+                    "turnout_probability": 0.0 if choice == "not_vote" else 1.0,
+                    "vote_prob_democrat": 1.0 if choice == "democrat" else 0.0,
+                    "vote_prob_republican": 1.0 if choice == "republican" else 0.0,
+                    "vote_prob_other": 0.0,
+                    "vote_prob_undecided": 0.0,
+                    "most_likely_choice": choice,
+                    "sample_weight": agents.loc[agents["base_ces_id"] == ces_id, "sample_weight"].iloc[0],
+                    "invalid_choice": False,
+                    "forbidden_choice": False,
+                    "legacy_probability_schema": False,
+                    "transport_error": False,
+                }
+            )
+        return pd.DataFrame(rows)
+
+    for rel, baseline in [
+        ("01_individual_persona", "ces_survey_memory_llm_strict"),
+        ("05_ablation_placebo", "L6_strict_memory_context_llm"),
+    ]:
+        run_dir = tmp_path / rel
+        run_dir.mkdir()
+        agents.to_parquet(run_dir / "agents.parquet", index=False)
+        response_rows(rel, baseline).to_parquet(run_dir / "responses.parquet", index=False)
+
+    config_path = tmp_path / "e06.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "run_id: tiny_e06",
+                "small_n_threshold: 4",
+                "workers: 2",
+                "paths:",
+                f"  run_dir: {tmp_path / '06_subgroup_calibration'}",
+                f"  e01_run_dir: {tmp_path / '01_individual_persona'}",
+                f"  e05_run_dir: {tmp_path / '05_ablation_placebo'}",
+                f"  ces_targets: {targets_path}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    outputs = run_ces_subgroup_calibration_benchmark(config_path)
+    assert outputs["report"].exists()
+    assert outputs["runtime"].exists()
+    reliability = pd.read_parquet(outputs["subgroup_reliability_metrics"])
+    assert {"state_po_x_party_id_3", "state_po_x_race_ethnicity"} <= set(reliability["dimension"])
+    assert reliability[reliability["dimension"] == "overall"]["multiclass_brier_hard_choice"].eq(0.0).all()
+    assert reliability[reliability["dimension"] != "overall"]["small_n"].all()
+    assert "vote_log_loss" not in reliability.columns
+    calibration = pd.read_parquet(outputs["calibration_bins"])
+    assert set(calibration["calibration_type"]) == {"turnout_hard_choice"}
+    gates = pd.read_parquet(outputs["quality_gates"])
+    assert gates["passed"].all()
+    runtime = json.loads(outputs["runtime"].read_text(encoding="utf-8"))
+    assert runtime["n_llm_tasks"] == 0
+    assert runtime["llm_calls_made"] == 0
+    assert any((tmp_path / "06_subgroup_calibration" / "figures").glob("*.png"))
 
 
 def test_ces_leakage_prompt_masks_and_swaps_information():
@@ -1331,6 +1516,27 @@ def test_ces_leakage_prompt_masks_and_swaps_information():
     assert "- State: MN" in state_swap
     assert "Kamala Harris" in state_swap
 
+    mi_agent = agent.copy()
+    mi_agent["state_po"] = "MI"
+    mi_masked, _, mi_meta = render_leakage_prompt(
+        condition="masked_state",
+        agent=mi_agent,
+        strict_memory=strict_memory,
+        max_memory_facts=4,
+    )
+    assert mi_meta["displayed_state_po"] == "F07"
+    assert "- State: F07" in mi_masked
+    assert "- State: MI" not in mi_masked
+    mi_swap, _, mi_meta = render_leakage_prompt(
+        condition="state_swap_placebo",
+        agent=mi_agent,
+        strict_memory=strict_memory,
+        max_memory_facts=4,
+    )
+    assert mi_meta["displayed_state_po"] == "NC"
+    assert "- State: NC" in mi_swap
+    assert "- State: MI" not in mi_swap
+
     candidate_swap, _, meta = render_leakage_prompt(condition="candidate_swap_placebo", **common)
     assert meta["candidate_mode"] == "candidate_swap"
     assert "Democratic candidate: Donald Trump" in candidate_swap
@@ -1338,19 +1544,12 @@ def test_ces_leakage_prompt_masks_and_swaps_information():
 
 
 def test_ces_leakage_anonymous_response_normalizes_to_canonical_schema():
-    raw = json.dumps(
-        {
-            "turnout_probability": 0.75,
-            "vote_probabilities": {"candidate_a": 0.6, "candidate_b": 0.3, "other": 0.05, "undecided": 0.05},
-            "most_likely_choice": "candidate_a",
-            "confidence": 0.8,
-        }
-    )
+    raw = json.dumps({"choice": "candidate_a"})
     normalized = normalize_leakage_response(raw, "anonymous_candidates")
     parsed = parse_turnout_vote_json(normalized)
     assert parsed["parse_status"] == "ok"
-    assert parsed["vote_prob_democrat"] == 0.6
-    assert parsed["vote_prob_republican"] == 0.3
+    assert parsed["vote_prob_democrat"] == 1.0
+    assert parsed["vote_prob_republican"] == 0.0
     assert parsed["most_likely_choice"] == "democrat"
 
 
@@ -1470,6 +1669,8 @@ def test_ces_leakage_benchmark_runner_smoke(tmp_path):
     )
     outputs = run_ces_leakage_benchmark(run_config)
     assert outputs["report"].exists()
+    assert outputs["runtime"].exists()
+    assert outputs["runtime_log"].exists()
     responses = pd.read_parquet(outputs["responses"])
     assert {
         "named_candidates",
@@ -1482,7 +1683,158 @@ def test_ces_leakage_benchmark_runner_smoke(tmp_path):
     } <= set(responses["baseline"])
     assert responses["parse_status"].eq("ok").all()
     assert pd.read_parquet(outputs["condition_metadata"])["displayed_state_po"].notna().all()
+    runtime_log = pd.read_parquet(outputs["runtime_log"])
+    assert {
+        "latency_ms",
+        "cache_hit",
+        "parse_status",
+        "raw_choice",
+        "legacy_probability_schema",
+        "transport_error",
+    } <= set(runtime_log.columns)
     assert any((tmp_path / "run" / "figures").glob("*.png"))
+
+
+def test_eval_preflight_runner_smoke(tmp_path):
+    config_path = _write_tiny_ces_fixture(tmp_path)
+    ces_paths = build_ces(
+        config_path,
+        "configs/crosswalks/ces_2024_profile.yaml",
+        "configs/crosswalks/ces_2024_pre_questions.yaml",
+        "configs/crosswalks/ces_2024_targets.yaml",
+        "configs/crosswalks/ces_2024_context.yaml",
+        tmp_path / "ces",
+    )
+    strict_memory = build_ces_memory_cards(
+        ces_paths["respondents"],
+        ces_paths["answers"],
+        "configs/fact_templates/ces_2024_common_facts.yaml",
+        "strict_pre_no_vote_v1",
+        tmp_path / "strict_memory",
+        max_facts=4,
+    )
+    poll_memory = build_ces_memory_cards(
+        ces_paths["respondents"],
+        ces_paths["answers"],
+        "configs/fact_templates/ces_2024_common_facts.yaml",
+        "poll_informed_pre_v1",
+        tmp_path / "poll_memory",
+        max_facts=4,
+    )
+    mit_truth = pd.DataFrame(
+        [
+            {"year": 2024, "geo_level": "state", "state_po": "PA", "dem_votes": 50.0, "rep_votes": 50.0, "dem_share_2p": 0.50, "margin_2p": 0.00, "winner": "tie"},
+        ]
+    )
+    mit_path = tmp_path / "mit_truth.parquet"
+    mit_truth.to_parquet(mit_path, index=False)
+    run_config = tmp_path / "preflight.yaml"
+    run_config.write_text(
+        "\n".join(
+            [
+                "run_id: tiny_preflight",
+                "seed: 3",
+                "sample:",
+                "  states: [PA]",
+                "  agents_per_state: 1",
+                "  split: all",
+                "memory:",
+                "  max_memory_facts: 4",
+                "llm:",
+                "  workers: 2",
+                "model:",
+                "  provider: mock",
+                "paths:",
+                f"  run_dir: {tmp_path / 'preflight'}",
+                f"  ces_respondents: {ces_paths['respondents']}",
+                f"  ces_targets: {ces_paths['targets']}",
+                f"  ces_context: {ces_paths['context']}",
+                f"  strict_memory_facts: {strict_memory['facts']}",
+                f"  poll_memory_facts: {poll_memory['facts']}",
+                "  question_set: configs/questions/ces_2024_president_turnout_vote.yaml",
+                f"  mit_state_truth: {mit_path}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    outputs = run_eval_preflight(run_config)
+    assert outputs["report"].exists()
+    assert outputs["runtime_log"].exists()
+    assert pd.read_parquet(outputs["quality_gates"])["passed"].all()
+    assert pd.read_parquet(outputs["leakage_checks"])["passed"].all()
+    runtime_log = pd.read_parquet(outputs["runtime_log"])
+    assert {"latency_ms", "cache_hit", "parse_status", "raw_choice", "legacy_probability_schema"} <= set(runtime_log.columns)
+
+
+def test_prompt_robustness_runner_smoke_and_summary(tmp_path):
+    config_path = _write_tiny_ces_fixture(tmp_path)
+    ces_paths = build_ces(
+        config_path,
+        "configs/crosswalks/ces_2024_profile.yaml",
+        "configs/crosswalks/ces_2024_pre_questions.yaml",
+        "configs/crosswalks/ces_2024_targets.yaml",
+        "configs/crosswalks/ces_2024_context.yaml",
+        tmp_path / "ces",
+    )
+    strict_memory = build_ces_memory_cards(
+        ces_paths["respondents"],
+        ces_paths["answers"],
+        "configs/fact_templates/ces_2024_common_facts.yaml",
+        "strict_pre_no_vote_v1",
+        tmp_path / "strict_memory",
+        max_facts=4,
+    )
+    run_config = tmp_path / "robustness.yaml"
+    run_config.write_text(
+        "\n".join(
+            [
+                "run_id: tiny_robustness",
+                "seed: 3",
+                "states: [PA]",
+                "agents_per_state: 1",
+                "prompt_variants: [base_json, json_strict_nonzero, candidate_order_reversed]",
+                "sampling:",
+                "  split: all",
+                "memory:",
+                "  max_memory_facts: 4",
+                "llm:",
+                "  workers: 2",
+                "model:",
+                "  provider: mock",
+                "paths:",
+                f"  run_dir: {tmp_path / 'suite' / '03_prompt_robustness'}",
+                f"  ces_respondents: {ces_paths['respondents']}",
+                f"  ces_targets: {ces_paths['targets']}",
+                f"  ces_context: {ces_paths['context']}",
+                f"  strict_memory_facts: {strict_memory['facts']}",
+                "  question_set: configs/questions/ces_2024_president_turnout_vote.yaml",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    outputs = run_ces_prompt_robustness_benchmark(run_config)
+    assert outputs["report"].exists()
+    assert outputs["runtime"].exists()
+    assert outputs["runtime_log"].exists()
+    responses = pd.read_parquet(outputs["responses"])
+    assert {"base_json", "json_strict_nonzero", "candidate_order_reversed"} <= set(responses["prompt_variant"])
+    assert responses["parse_status"].eq("ok").all()
+    runtime_log = pd.read_parquet(outputs["runtime_log"])
+    assert {"latency_ms", "cache_hit", "parse_status", "raw_choice", "legacy_probability_schema"} <= set(runtime_log.columns)
+    assert not pd.read_parquet(outputs["pairwise_variant_metrics"]).empty
+    summary_config = tmp_path / "summary.yaml"
+    summary_config.write_text(
+        "\n".join(
+            [
+                f"root_dir: {tmp_path / 'suite'}",
+                "experiments:",
+                "  03_prompt_robustness: 03_prompt_robustness",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    summary_outputs = write_eval_suite_summary(summary_config)
+    assert summary_outputs["summary"].exists()
 
 
 def test_ces_llm_prompt_information_conditions_are_distinct():
@@ -1869,7 +2221,7 @@ def test_ces_individual_and_aggregate_metrics_include_diagnostics():
         subgroup_columns=["party_id"],
         small_n_threshold=30,
     )
-    assert {"turnout_auc", "vote_macro_f1", "vote_log_loss", "vote_confusion_count"} <= set(metrics["metric_name"])
+    assert {"turnout_auc", "vote_macro_f1", "vote_confusion_count"} <= set(metrics["metric_name"])
     assert metrics[metrics["metric_scope"] == "subgroup"]["small_n"].all()
 
     aggregate = pd.DataFrame(

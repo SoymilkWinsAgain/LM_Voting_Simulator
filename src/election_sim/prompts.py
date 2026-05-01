@@ -123,20 +123,15 @@ Election context:
 {% endfor %}
 
 Task:
-Estimate this voter's turnout probability and presidential vote choice.
+Choose the single election behavior this voter would most likely take.
+
+Allowed choices:
+- not_vote: does not vote
+- democrat: votes for the Democratic candidate
+- republican: votes for the Republican candidate
 
 Return JSON only with this schema:
-{
-  "turnout_probability": 0.0,
-  "vote_probabilities": {
-    "democrat": 0.0,
-    "republican": 0.0,
-    "other": 0.0,
-    "undecided": 0.0
-  },
-  "most_likely_choice": "democrat|republican|other|undecided|not_vote",
-  "confidence": 0.0
-}
+{"choice": "not_vote|democrat|republican"}
 """
 
 TEMPLATES = {

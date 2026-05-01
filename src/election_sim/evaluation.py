@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import f1_score, log_loss, roc_auc_score
+from sklearn.metrics import f1_score, roc_auc_score
 
 from .io import write_table
 from .mit import state_truth_table
@@ -114,7 +114,7 @@ def _safe_auc(y: pd.Series, p: pd.Series) -> float | None:
         return None
 
 
-VOTE_EVAL_CLASSES = ["democrat", "not_vote", "other", "republican"]
+VOTE_EVAL_CLASSES = ["democrat", "not_vote", "republican"]
 
 
 def _vote_probability_matrix(group: pd.DataFrame) -> np.ndarray:
@@ -212,7 +212,6 @@ def _turnout_vote_metric_rows(
             y_true = known_vote[vote_target_id].astype(str)
             y_pred = known_vote["most_likely_choice"].fillna("not_vote").astype(str)
             y_pred = y_pred.where(y_pred.isin(VOTE_EVAL_CLASSES), "not_vote")
-            prob_matrix = _vote_probability_matrix(known_vote)
             rows.extend(
                 [
                     _metric_row(
@@ -236,18 +235,6 @@ def _turnout_vote_metric_rows(
                         metric_value=float(
                             f1_score(y_true, y_pred, labels=VOTE_EVAL_CLASSES, average="macro", zero_division=0)
                         ),
-                        group_key=group_key,
-                        question_id=vote_target_id,
-                        n=int(len(known_vote)),
-                        small_n=small_n,
-                    ),
-                    _metric_row(
-                        run_id=run_id,
-                        baseline=baseline,
-                        model_name=model_name,
-                        metric_scope=metric_scope,
-                        metric_name="vote_log_loss",
-                        metric_value=float(log_loss(y_true, prob_matrix, labels=VOTE_EVAL_CLASSES)),
                         group_key=group_key,
                         question_id=vote_target_id,
                         n=int(len(known_vote)),

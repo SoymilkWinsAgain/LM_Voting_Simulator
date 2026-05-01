@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import statistics
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,21 +15,21 @@ import numpy as np
 import pandas as pd
 from sklearn.calibration import calibration_curve
 from sklearn.isotonic import IsotonicRegression
-from sklearn.metrics import f1_score, log_loss, roc_auc_score
+from sklearn.metrics import f1_score, roc_auc_score
 
 from .aggregation import aggregate_turnout_vote_state_results
-from .ces_schema import CES_VOTE_PROBABILITY_CODES, format_turnout_vote_response, parse_turnout_vote_json
+from .ces_schema import CES_TURNOUT_VOTE_CHOICES, format_turnout_vote_choice_response, parse_turnout_vote_json
 from .config import ModelConfig
 from .evaluation import turnout_vote_election_metrics
-from .io import ensure_dir, load_yaml, stable_json, write_table
+from .io import ensure_dir, load_yaml, stable_json, write_json, write_table
 from .llm import build_llm_client
 from .prompts import build_ces_prompt
 from .survey_memory import is_direct_pre_vote_variable, is_leakage_variable, is_post_vote_or_turnout_variable
 from .transforms import stable_hash
 
 
-VOTE_CLASSES = ["democrat", "republican", "other", "not_vote"]
-CANDIDATE_CLASSES = ["democrat", "republican", "other"]
+VOTE_CLASSES = ["democrat", "republican", "not_vote"]
+CANDIDATE_CLASSES = ["democrat", "republican"]
 POLL_PRIOR_VARIABLES = {"CC24_363", "CC24_364a"}
 DEFAULT_SUBGROUPS = [
     "party_id_3",
@@ -64,6 +66,7 @@ PROMPT_COLUMNS = [
     "prompt_text",
     "memory_fact_ids_used",
     "cache_hit",
+    "latency_ms",
     "created_at",
 ]
 
@@ -90,6 +93,120 @@ class BenchmarkPaths:
     run_dir: Path
     figures_dir: Path
     cache_path: Path
+
+
+def _git_commit() -> str:
+    try:
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, timeout=5).strip()
+    except Exception:
+        return "unknown"
+
+
+def _gpu_snapshot(label: str) -> dict[str, Any]:
+    base: dict[str, Any] = {"label": label, "created_at": pd.Timestamp.now(tz="UTC").isoformat()}
+    try:
+        output = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,name,memory.total,memory.used,memory.free,utilization.gpu",
+                "--format=csv,noheader,nounits",
+            ],
+            text=True,
+            timeout=5,
+        ).strip()
+    except Exception as exc:
+        return {**base, "gpu_available": False, "gpu_error": f"{type(exc).__name__}: {exc}"}
+    gpus: list[dict[str, Any]] = []
+    for line in output.splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) != 6:
+            continue
+        try:
+            gpus.append(
+                {
+                    "index": int(parts[0]),
+                    "name": parts[1],
+                    "memory_total_mib": int(parts[2]),
+                    "memory_used_mib": int(parts[3]),
+                    "memory_free_mib": int(parts[4]),
+                    "utilization_gpu_pct": int(parts[5]),
+                }
+            )
+        except ValueError:
+            continue
+    if not gpus:
+        return {**base, "gpu_available": False, "gpu_error": f"Could not parse nvidia-smi output: {output}"}
+    used = [gpu["memory_used_mib"] for gpu in gpus]
+    free = [gpu["memory_free_mib"] for gpu in gpus]
+    util = [gpu["utilization_gpu_pct"] for gpu in gpus]
+    return {
+        **base,
+        "gpu_available": True,
+        "gpu_count": len(gpus),
+        "gpu_memory_total_mib": int(sum(gpu["memory_total_mib"] for gpu in gpus)),
+        "gpu_memory_used_mib": int(sum(used)),
+        "gpu_memory_free_mib": int(sum(free)),
+        "gpu_memory_used_mib_max": int(max(used)),
+        "gpu_memory_free_mib_min": int(min(free)),
+        "gpu_utilization_pct_max": int(max(util)),
+        "gpu_utilization_pct_mean": float(sum(util) / len(util)),
+        "gpus": gpus,
+    }
+
+
+def _gpu_peak_summary(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
+    available = [snapshot for snapshot in snapshots if snapshot.get("gpu_available")]
+    if not available:
+        errors = [snapshot.get("gpu_error") for snapshot in snapshots if snapshot.get("gpu_error")]
+        return {
+            "gpu_available": False,
+            "gpu_error": "; ".join(str(error) for error in errors if error) or "No GPU snapshots available",
+        }
+    return {
+        "gpu_available": True,
+        "gpu_peak_memory_used_mib": max(int(snapshot.get("gpu_memory_used_mib", 0)) for snapshot in available),
+        "gpu_min_memory_free_mib": min(int(snapshot.get("gpu_memory_free_mib", 0)) for snapshot in available),
+        "gpu_peak_utilization_pct": max(int(snapshot.get("gpu_utilization_pct_max", 0)) for snapshot in available),
+    }
+
+
+def _extract_json_payload(raw_response: str) -> dict[str, Any] | None:
+    text = str(raw_response or "").strip()
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        import re
+
+        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if not match:
+            return None
+        try:
+            payload = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _raw_choice_diagnostics(raw_response: str) -> dict[str, Any]:
+    payload = _extract_json_payload(raw_response)
+    if payload is None:
+        return {
+            "raw_json_ok": False,
+            "raw_choice": None,
+            "invalid_choice": False,
+            "forbidden_choice": False,
+            "legacy_probability_schema": False,
+        }
+    choice = payload.get("choice")
+    choice = choice if isinstance(choice, str) else None
+    legacy = "vote_probabilities" in payload or "turnout_probability" in payload
+    return {
+        "raw_json_ok": True,
+        "raw_choice": choice,
+        "invalid_choice": choice is not None and choice not in CES_TURNOUT_VOTE_CHOICES,
+        "forbidden_choice": choice in {"other", "undecided"},
+        "legacy_probability_schema": legacy,
+    }
 
 
 def assign_ces_splits(ces_ids: pd.Series, seed: int | str) -> pd.DataFrame:
@@ -247,19 +364,17 @@ def _canonical_raw(turnout: float, candidate_probs: dict[str, float]) -> str:
     probs = {code: max(0.0, float(candidate_probs.get(code, 0.0))) for code in CANDIDATE_CLASSES}
     total = sum(probs.values())
     if total <= 0:
-        probs = {"democrat": 1 / 3, "republican": 1 / 3, "other": 1 / 3}
+        probs = {"democrat": 0.5, "republican": 0.5}
     else:
         probs = {code: value / total for code, value in probs.items()}
-    vote_probs = {**probs, "undecided": 0.0}
     turnout = float(np.clip(turnout, 0.0, 1.0))
-    choice = "not_vote" if turnout < 0.5 else max(CES_VOTE_PROBABILITY_CODES, key=lambda code: vote_probs.get(code, 0.0))
-    confidence = max([turnout, 1.0 - turnout, *vote_probs.values()])
-    return format_turnout_vote_response(
-        turnout_probability=turnout,
-        vote_probabilities=vote_probs,
-        most_likely_choice=choice,
-        confidence=float(np.clip(confidence, 0.0, 1.0)),
-    )
+    scores = {
+        "not_vote": 1.0 - turnout,
+        "democrat": turnout * probs["democrat"],
+        "republican": turnout * probs["republican"],
+    }
+    choice = max(CES_TURNOUT_VOTE_CHOICES, key=lambda code: (scores[code], -CES_TURNOUT_VOTE_CHOICES.index(code)))
+    return format_turnout_vote_choice_response(choice)
 
 
 class BenchmarkBaseline:
@@ -692,20 +807,10 @@ def benchmark_metric_rows(
                 y_true = known_vote["president_vote_2024"].astype(str)
                 y_pred = probs.idxmax(axis=1)
                 vw = known_vote["sample_weight"] if weighted else None
-                log_loss_value = None
-                try:
-                    ordered_classes = sorted(VOTE_CLASSES)
-                    log_loss_value = float(
-                        log_loss(y_true, probs[ordered_classes], labels=ordered_classes, sample_weight=vw)
-                    )
-                except ValueError:
-                    log_loss_value = None
                 rows.extend(
                     [
                         _metric_row(run_id, baseline, model_name, metric_scope, "vote_accuracy", _weighted_mean((y_pred == y_true).astype(float), vw), weighted=weighted, group_key=group_key, n=len(known_vote)),
                         _metric_row(run_id, baseline, model_name, metric_scope, "vote_macro_f1", float(f1_score(y_true, y_pred, labels=VOTE_CLASSES, average="macro", zero_division=0, sample_weight=vw)), weighted=weighted, group_key=group_key, n=len(known_vote)),
-                        _metric_row(run_id, baseline, model_name, metric_scope, "vote_log_loss", log_loss_value, weighted=weighted, group_key=group_key, n=len(known_vote)),
-                        _metric_row(run_id, baseline, model_name, metric_scope, "vote_brier_multiclass", multiclass_brier(y_true, probs, vw), weighted=weighted, group_key=group_key, n=len(known_vote)),
                     ]
                 )
                 confusion = pd.crosstab(y_true, y_pred)
@@ -856,17 +961,7 @@ Post-election diagnostic information:
 - The respondent's post-election presidential vote label is: {vote}
 
 Return JSON only with this schema:
-{{
-  "turnout_probability": 0.0,
-  "vote_probabilities": {{
-    "democrat": 0.0,
-    "republican": 0.0,
-    "other": 0.0,
-    "undecided": 0.0
-  }},
-  "most_likely_choice": "democrat|republican|other|undecided|not_vote",
-  "confidence": 0.0
-}}
+{{"choice": "not_vote|democrat|republican"}}
 """
 
 
@@ -883,7 +978,7 @@ def _post_hoc_oracle_raw(agent: pd.Series, targets_wide: pd.DataFrame) -> str:
     else:
         turnout = 0.5
     if vote_label in CANDIDATE_CLASSES:
-        probs = {code: 0.005 for code in CANDIDATE_CLASSES}
+        probs = {code: 0.01 for code in CANDIDATE_CLASSES}
         probs[vote_label] = 0.99
     elif vote_label == "not_vote":
         probs = {code: 1.0 / len(CANDIDATE_CLASSES) for code in CANDIDATE_CLASSES}
@@ -976,18 +1071,18 @@ def _run_llm_pilot(
     context: pd.DataFrame,
     strict_memory_facts: pd.DataFrame,
     poll_memory_facts: pd.DataFrame,
-) -> tuple[list[dict[str, Any]], pd.DataFrame, dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     llm_cfg = cfg.get("llm_pilot", {})
     baseline_names = [name for name in cfg.get("baselines", {}).get("llm", LLM_BASELINES) if name in LLM_BASELINES]
     if not baseline_names:
-        return [], pd.DataFrame(columns=PROMPT_COLUMNS), {"llm_enabled": False}
+        return [], pd.DataFrame(columns=PROMPT_COLUMNS), pd.DataFrame(), {"llm_enabled": False}
     cap = int(llm_cfg.get("max_respondents", 750))
     per_state_target = int(llm_cfg.get("per_state_target", 10))
-    timing_responses = int(llm_cfg.get("timing_responses", 50))
-    threshold = float(llm_cfg.get("timing_threshold_seconds", 6.0))
-    max_runtime_minutes = float(llm_cfg.get("max_runtime_minutes", 60.0))
+    workers = max(1, int(llm_cfg.get("workers", cfg.get("llm", {}).get("workers", 1))))
+    checkpoint_every = max(1, int(llm_cfg.get("checkpoint_every", 25)))
+    gpu_sample_every = max(1, int(llm_cfg.get("gpu_sample_every", checkpoint_every)))
     seed = int(cfg.get("seed", 20260426))
-    pilot_ids = select_llm_pilot_ids(cohort, targets, cap=cap, per_state_target=per_state_target, seed=seed)
+    pilot_ids = select_llm_pilot_ids(cohort, targets, cap=cap, per_state_target=per_state_target, seed=seed)[:cap]
 
     model_cfg = ModelConfig.model_validate(cfg.get("model", {}))
     client = build_llm_client(model_cfg)
@@ -999,20 +1094,9 @@ def _run_llm_pilot(
     targets_wide = _target_wide(targets)
     agents_by_id = agents.set_index("base_ces_id", drop=False)
 
-    prompt_rows: list[dict[str, Any]] = []
-    response_rows: list[dict[str, Any]] = []
-    latencies: list[float] = []
-    observed_latencies: list[float] = []
-    cache_hits = 0
-    ollama_calls = 0
-    deterministic_rows = 0
-    effective_cap = cap
-    timing_checked = False
-    processed_pairs = 0
-    for baseline in baseline_names:
-        for ces_id in pilot_ids:
-            if pilot_ids.index(ces_id) >= effective_cap:
-                continue
+    tasks: list[dict[str, Any]] = []
+    for baseline_order, baseline in enumerate(baseline_names):
+        for pilot_rank, ces_id in enumerate(pilot_ids):
             agent = agents_by_id.loc[ces_id]
             prompt_text, fact_ids = _llm_prompt_for_baseline(
                 baseline,
@@ -1028,89 +1112,227 @@ def _run_llm_pilot(
             prompt_temperature = 0.0 if baseline == "post_hoc_oracle_llm" else model_cfg.temperature
             prompt_hash = stable_hash(response_model_name, baseline, prompt_text, prompt_temperature, length=32)
             cache_key = stable_hash(cfg["run_id"], response_model_name, baseline, prompt_hash, length=40)
-            cache_hit = cache_key in cache
-            latency_ms = None
-            if baseline == "post_hoc_oracle_llm":
-                raw = _post_hoc_oracle_raw(agent, targets_wide)
-                latency_ms = 0
-                cache_hit = False
-                deterministic_rows += 1
-            elif cache_hit:
-                raw = cache[cache_key]["raw_response"]
-                latency_ms = cache[cache_key].get("latency_ms")
-                cache_hits += 1
-                if latency_ms is not None:
-                    observed_latencies.append(float(latency_ms) / 1000.0)
-            else:
-                started = time.time()
-                raw = client.complete(prompt_text, ["democrat", "republican", "other", "undecided", "not_vote"])
-                latency_ms = int((time.time() - started) * 1000)
-                latencies.append(latency_ms / 1000.0)
-                observed_latencies.append(latency_ms / 1000.0)
-                ollama_calls += 1
-                cache_row = {
-                    "cache_key": cache_key,
+            prompt_id = stable_hash(cfg["run_id"], baseline, ces_id, prompt_hash, length=20)
+            tasks.append(
+                {
                     "run_id": cfg["run_id"],
-                    "model_name": response_model_name,
                     "baseline": baseline,
+                    "baseline_order": baseline_order,
+                    "pilot_rank": pilot_rank,
+                    "prompt_id": prompt_id,
                     "prompt_hash": prompt_hash,
+                    "prompt_text": prompt_text,
+                    "memory_fact_ids_used": fact_ids,
+                    "agent_id": agent["agent_id"],
+                    "base_ces_id": ces_id,
+                    "state_po": agent.get("state_po"),
+                    "sample_weight": float(agent.get("sample_weight", 1.0)),
+                    "model_name": response_model_name,
+                    "prompt_temperature": prompt_temperature,
+                    "cache_key": cache_key,
+                    "cacheable": baseline != "post_hoc_oracle_llm",
+                }
+            )
+
+    prompt_rows: list[dict[str, Any]] = []
+    response_rows: list[dict[str, Any]] = []
+    runtime_rows: list[dict[str, Any]] = []
+    observed_latencies: list[float] = []
+    cache_hits = 0
+    ollama_calls = 0
+    deterministic_rows = 0
+    processed_pairs = 0
+    gpu_snapshots = [_gpu_snapshot("llm_start")]
+    llm_started = time.time()
+
+    def write_checkpoint() -> None:
+        if prompt_rows:
+            write_table(pd.DataFrame(prompt_rows), paths.run_dir / "prompts.partial.parquet")
+        if response_rows:
+            write_table(pd.DataFrame(response_rows), paths.run_dir / "responses.partial.parquet")
+        if runtime_rows:
+            write_table(pd.DataFrame(runtime_rows), paths.run_dir / "runtime_log.partial.parquet")
+
+    def finish_uncached(task: dict[str, Any]) -> tuple[dict[str, Any], str, bool, int | None, str | None]:
+        started = time.time()
+        try:
+            raw = client.complete(task["prompt_text"], CES_TURNOUT_VOTE_CHOICES)
+            latency_ms = int((time.time() - started) * 1000)
+            return task, raw, False, latency_ms, None
+        except Exception as exc:
+            latency_ms = int((time.time() - started) * 1000)
+            return task, "", False, latency_ms, f"{type(exc).__name__}: {exc}"
+
+    def record_result(
+        task: dict[str, Any],
+        raw: str,
+        cache_hit: bool,
+        latency_ms: int | None,
+        transport_error: str | None,
+    ) -> None:
+        nonlocal cache_hits, ollama_calls, deterministic_rows, processed_pairs
+        if task["baseline"] == "post_hoc_oracle_llm":
+            deterministic_rows += 1
+        elif cache_hit:
+            cache_hits += 1
+        else:
+            ollama_calls += 1
+            if transport_error is None and task["cacheable"]:
+                cache_row = {
+                    "cache_key": task["cache_key"],
+                    "run_id": cfg["run_id"],
+                    "model_name": task["model_name"],
+                    "baseline": task["baseline"],
+                    "prompt_hash": task["prompt_hash"],
                     "raw_response": raw,
                     "latency_ms": latency_ms,
                     "created_at": pd.Timestamp.now(tz="UTC").isoformat(),
                 }
-                cache[cache_key] = cache_row
+                cache[task["cache_key"]] = cache_row
                 _append_cache(paths.cache_path, cache_row)
-            prompt_id = stable_hash(cfg["run_id"], baseline, ces_id, prompt_hash, length=20)
-            prompt_rows.append(
+        if latency_ms is not None:
+            observed_latencies.append(float(latency_ms) / 1000.0)
+        raw_diag = _raw_choice_diagnostics(raw)
+        parsed = parse_turnout_vote_json(raw)
+        parse_status = "transport_error" if transport_error else parsed["parse_status"]
+        prompt_rows.append(
+            {
+                "run_id": cfg["run_id"],
+                "prompt_id": task["prompt_id"],
+                "agent_id": task["agent_id"],
+                "base_ces_id": task["base_ces_id"],
+                "baseline": task["baseline"],
+                "model_name": task["model_name"],
+                "prompt_hash": task["prompt_hash"],
+                "prompt_text": task["prompt_text"],
+                "memory_fact_ids_used": task["memory_fact_ids_used"],
+                "cache_hit": cache_hit,
+                "latency_ms": latency_ms,
+                "created_at": pd.Timestamp.now(tz="UTC"),
+            }
+        )
+        rows = _response_rows(
+            run_id=cfg["run_id"],
+            baseline=task["baseline"],
+            predictions=pd.DataFrame(
                 {
-                    "run_id": cfg["run_id"],
-                    "prompt_id": prompt_id,
-                    "agent_id": agent["agent_id"],
-                    "base_ces_id": ces_id,
-                    "baseline": baseline,
-                    "model_name": response_model_name,
-                    "prompt_hash": prompt_hash,
-                    "prompt_text": prompt_text,
-                    "memory_fact_ids_used": fact_ids,
-                    "cache_hit": cache_hit,
-                    "created_at": pd.Timestamp.now(tz="UTC"),
+                    "ces_id": [task["base_ces_id"]],
+                    "raw_response": [raw],
+                    "model_name": [task["model_name"]],
                 }
-            )
-            response_rows.extend(
-                _response_rows(
-                    run_id=cfg["run_id"],
-                    baseline=baseline,
-                    predictions=pd.DataFrame([{"ces_id": ces_id, "raw_response": raw, "model_name": response_model_name}]),
-                    cohort=cohort,
-                    prediction_scope="llm_pilot",
-                    is_llm=True,
-                    prompt_by_id={ces_id: {"prompt_id": prompt_id, "cache_hit": cache_hit, "latency_ms": latency_ms}},
-                )
-            )
-            processed_pairs += 1
-            if not timing_checked and len(latencies) >= timing_responses:
-                median_latency = statistics.median(latencies)
-                if median_latency > threshold:
-                    effective_cap = min(effective_cap, int(llm_cfg.get("slow_cap_respondents", 300)))
-                projected = median_latency * len(baseline_names) * effective_cap / 60.0
-                if projected > max_runtime_minutes:
-                    runtime_cap = max(25, int(max_runtime_minutes * 60.0 / (median_latency * len(baseline_names))))
-                    effective_cap = min(effective_cap, runtime_cap)
-                timing_checked = True
+            ),
+            cohort=cohort,
+            prediction_scope="llm_pilot",
+            is_llm=True,
+            prompt_by_id={task["base_ces_id"]: {"prompt_id": task["prompt_id"], "cache_hit": cache_hit, "latency_ms": latency_ms}},
+        )
+        response_row = rows[0]
+        response_row["parse_status"] = parse_status
+        response_row["raw_json_ok"] = raw_diag["raw_json_ok"]
+        response_row["raw_choice"] = raw_diag["raw_choice"]
+        response_row["invalid_choice"] = bool(raw_diag["invalid_choice"] or parse_status == "invalid_choice")
+        response_row["legacy_probability_schema"] = bool(raw_diag["legacy_probability_schema"] or parsed.get("legacy_probability_schema"))
+        response_row["forbidden_choice"] = bool(raw_diag["forbidden_choice"])
+        response_row["transport_error"] = transport_error
+        response_rows.append(response_row)
+        runtime_rows.append(
+            {
+                "run_id": cfg["run_id"],
+                "event": "llm_response",
+                "prompt_id": task["prompt_id"],
+                "agent_id": task["agent_id"],
+                "base_ces_id": task["base_ces_id"],
+                "baseline": task["baseline"],
+                "model_name": task["model_name"],
+                "cache_hit": cache_hit,
+                "latency_ms": latency_ms,
+                "parse_status": parse_status,
+                "raw_choice": raw_diag["raw_choice"],
+                "invalid_choice": bool(raw_diag["invalid_choice"] or parse_status == "invalid_choice"),
+                "legacy_probability_schema": bool(raw_diag["legacy_probability_schema"] or parsed.get("legacy_probability_schema")),
+                "forbidden_choice": bool(raw_diag["forbidden_choice"]),
+                "transport_error": transport_error,
+                "created_at": pd.Timestamp.now(tz="UTC"),
+            }
+        )
+        processed_pairs += 1
+        if processed_pairs % gpu_sample_every == 0:
+            gpu_snapshots.append(_gpu_snapshot(f"llm_after_response_{processed_pairs}"))
+        if processed_pairs % checkpoint_every == 0:
+            write_checkpoint()
+
+    pending: list[dict[str, Any]] = []
+    for task in tasks:
+        if task["baseline"] == "post_hoc_oracle_llm":
+            agent = agents_by_id.loc[task["base_ces_id"]]
+            record_result(task, _post_hoc_oracle_raw(agent, targets_wide), False, 0, None)
+        elif task["cache_key"] in cache:
+            cached = cache[task["cache_key"]]
+            record_result(task, str(cached["raw_response"]), True, cached.get("latency_ms"), None)
+        else:
+            pending.append(task)
+
+    if workers == 1:
+        for task in pending:
+            record_result(*finish_uncached(task))
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_task = {executor.submit(finish_uncached, task): task for task in pending}
+            for future in as_completed(future_to_task):
+                record_result(*future.result())
+
+    gpu_snapshots.append(_gpu_snapshot("llm_end"))
+    write_checkpoint()
+    baseline_order = {name: idx for idx, name in enumerate(baseline_names)}
+    prompt_rows.sort(key=lambda row: (baseline_order.get(row["baseline"], 999), str(row["base_ces_id"])))
+    response_rows.sort(key=lambda row: (baseline_order.get(row["baseline"], 999), str(row["base_ces_id"])))
+    runtime_rows.sort(key=lambda row: (baseline_order.get(row["baseline"], 999), str(row["base_ces_id"])))
+    runtime_log = pd.DataFrame(runtime_rows)
+    latency_series = pd.to_numeric(runtime_log.get("latency_ms", pd.Series(dtype=float)), errors="coerce").dropna()
+    parse_status = runtime_log.get("parse_status", pd.Series(dtype=str)).fillna("").astype(str) if not runtime_log.empty else pd.Series(dtype=str)
+    transport_errors = runtime_log.get("transport_error", pd.Series(dtype=object)).notna() if not runtime_log.empty else pd.Series(dtype=bool)
+    invalid_choice = runtime_log.get("invalid_choice", pd.Series(dtype=bool)).fillna(False).astype(bool) if not runtime_log.empty else pd.Series(dtype=bool)
+    forbidden_choice = runtime_log.get("forbidden_choice", pd.Series(dtype=bool)).fillna(False).astype(bool) if not runtime_log.empty else pd.Series(dtype=bool)
+    legacy_schema = runtime_log.get("legacy_probability_schema", pd.Series(dtype=bool)).fillna(False).astype(bool) if not runtime_log.empty else pd.Series(dtype=bool)
+    parse_ok_rate = float((parse_status == "ok").mean()) if len(parse_status) else None
+    invalid_choice_rate = float(invalid_choice.mean()) if len(invalid_choice) else None
+    forbidden_choice_rate = float(forbidden_choice.mean()) if len(forbidden_choice) else None
+    legacy_schema_rate = float(legacy_schema.mean()) if len(legacy_schema) else None
+    transport_error_rate = float(transport_errors.mean()) if len(transport_errors) else None
+    llm_runtime_seconds = time.time() - llm_started
     metadata = {
         "llm_enabled": True,
         "requested_cap": cap,
-        "effective_cap": effective_cap,
+        "effective_cap": len(pilot_ids),
         "n_pilot_ids_initial": len(pilot_ids),
+        "n_baselines": len(baseline_names),
+        "n_llm_tasks": len(tasks),
         "n_response_rows": len(response_rows),
         "median_latency_seconds": statistics.median(observed_latencies) if observed_latencies else None,
+        "p90_latency_seconds": float(latency_series.quantile(0.9) / 1000.0) if not latency_series.empty else None,
+        "throughput_responses_per_second": float(len(response_rows) / llm_runtime_seconds) if llm_runtime_seconds > 0 else None,
         "cache_hits": cache_hits,
         "ollama_calls": ollama_calls,
         "deterministic_rows": deterministic_rows,
-        "timing_checked": timing_checked,
         "processed_pairs": processed_pairs,
+        "workers": workers,
+        "llm_runtime_seconds": llm_runtime_seconds,
+        "parse_ok_rate": parse_ok_rate,
+        "invalid_choice_rate": invalid_choice_rate,
+        "forbidden_choice_rate": forbidden_choice_rate,
+        "legacy_probability_schema_rate": legacy_schema_rate,
+        "transport_error_rate": transport_error_rate,
+        "all_gates_passed": bool(
+            (parse_ok_rate is None or parse_ok_rate >= 0.95)
+            and (invalid_choice_rate is None or invalid_choice_rate <= 0.02)
+            and (forbidden_choice_rate is None or forbidden_choice_rate == 0.0)
+            and (legacy_schema_rate is None or legacy_schema_rate == 0.0)
+            and (transport_error_rate is None or transport_error_rate == 0.0)
+        ),
+        "gpu_snapshots": gpu_snapshots,
+        **_gpu_peak_summary(gpu_snapshots),
     }
-    return response_rows, pd.DataFrame(prompt_rows, columns=PROMPT_COLUMNS), metadata
+    return response_rows, pd.DataFrame(prompt_rows, columns=PROMPT_COLUMNS), runtime_log, metadata
 
 
 def _save_figure(fig: Any, out_base: Path) -> None:
@@ -1141,7 +1363,7 @@ def write_benchmark_figures(
     core = metrics[
         (metrics["metric_scope"] == "individual")
         & (metrics["weighted"].astype(bool))
-        & (metrics["metric_name"].isin(["turnout_brier", "turnout_auc", "vote_accuracy", "vote_macro_f1", "vote_log_loss"]))
+        & (metrics["metric_name"].isin(["turnout_accuracy_at_0_5", "turnout_auc", "vote_accuracy", "vote_macro_f1"]))
     ].copy()
     if not core.empty:
         pivot = core.pivot_table(index="baseline", columns="metric_name", values="metric_value", aggfunc="first")
@@ -1306,7 +1528,7 @@ def write_benchmark_report(
     metric_summary = metrics[
         (metrics["metric_scope"] == "individual")
         & (metrics["weighted"].astype(bool))
-        & metrics["metric_name"].isin(["turnout_brier", "turnout_auc", "turnout_ece", "vote_accuracy", "vote_macro_f1", "vote_log_loss", "vote_brier_multiclass"])
+        & metrics["metric_name"].isin(["turnout_accuracy_at_0_5", "turnout_auc", "turnout_ece", "vote_accuracy", "vote_macro_f1"])
     ].sort_values(["baseline", "metric_name"])
     figure_rows = pd.DataFrame({"figure": [str(path.relative_to(run_dir)) for path in figures]})
     lines = [
@@ -1343,6 +1565,7 @@ def write_benchmark_report(
         "## Output Files",
         "- `cohort.parquet`, `splits.parquet`, `agents.parquet`",
         "- `responses.parquet`, `crossfit_responses.parquet`, `prompts.parquet`",
+        "- `runtime_log.parquet`, `runtime.json`, `llm_cache.jsonl`",
         "- `individual_metrics.parquet`, `subgroup_metrics.parquet`, `calibration_bins.parquet`",
         "- `aggregate_crossfit_state_results.parquet`, `aggregate_eval_metrics.parquet`",
         "- `figures/*.png`, `figures/*.svg`",
@@ -1358,6 +1581,8 @@ def run_ces_individual_benchmark(config_path: str | Path) -> dict[str, Path]:
     run_id = cfg["run_id"]
     run_dir = ensure_dir(cfg.get("paths", {}).get("run_dir", f"data/runs/{run_id}"))
     paths = BenchmarkPaths(run_dir=run_dir, figures_dir=ensure_dir(run_dir / "figures"), cache_path=run_dir / "llm_cache.jsonl")
+    started = time.time()
+    gpu_snapshots = [_gpu_snapshot("run_start")]
 
     respondents = pd.read_parquet(cfg["paths"]["ces_respondents"])
     answers = pd.read_parquet(cfg["paths"]["ces_answers"])
@@ -1413,7 +1638,7 @@ def run_ces_individual_benchmark(config_path: str | Path) -> dict[str, Path]:
         crossfit_rows.extend(fold_rows)
         calibration_notes.extend([f"fold{fold}:{note}" for note in fold_notes])
 
-    llm_rows, prompt_rows, llm_metadata = _run_llm_pilot(
+    llm_rows, prompt_rows, runtime_log, llm_metadata = _run_llm_pilot(
         cfg=cfg,
         paths=paths,
         cohort=cohort,
@@ -1432,6 +1657,7 @@ def run_ces_individual_benchmark(config_path: str | Path) -> dict[str, Path]:
     write_table(responses, run_dir / "responses.parquet")
     write_table(crossfit_responses, run_dir / "crossfit_responses.parquet")
     write_table(prompts, run_dir / "prompts.parquet")
+    write_table(runtime_log, run_dir / "runtime_log.parquet")
 
     metrics = pd.DataFrame(benchmark_metric_rows(responses, cohort, targets, run_id, metric_scope="individual"))
     subgroup_metrics = compute_subgroup_metrics(responses, cohort, targets, run_id)
@@ -1474,6 +1700,46 @@ def run_ces_individual_benchmark(config_path: str | Path) -> dict[str, Path]:
         calibration_notes=calibration_notes,
         llm_metadata=llm_metadata,
     )
+    gpu_snapshots.extend(llm_metadata.get("gpu_snapshots", []))
+    gpu_snapshots.append(_gpu_snapshot("run_end"))
+    runtime_seconds = time.time() - started
+    latency = pd.to_numeric(runtime_log.get("latency_ms", pd.Series(dtype=float)), errors="coerce").dropna()
+    cache_hit_rate = (
+        float(runtime_log["cache_hit"].fillna(False).astype(bool).mean())
+        if "cache_hit" in runtime_log.columns and not runtime_log.empty
+        else None
+    )
+    runtime = {
+        "run_id": run_id,
+        "git_commit": _git_commit(),
+        "model_name": cfg.get("model", {}).get("model_name"),
+        "provider": cfg.get("model", {}).get("provider"),
+        "temperature": cfg.get("model", {}).get("temperature"),
+        "max_tokens": cfg.get("model", {}).get("max_tokens"),
+        "workers": llm_metadata.get("workers"),
+        "n_cohort_agents": int(len(agents)),
+        "n_llm_agents": int(llm_metadata.get("effective_cap", 0)),
+        "n_llm_baselines": int(llm_metadata.get("n_baselines", 0)),
+        "n_llm_tasks": int(llm_metadata.get("n_llm_tasks", 0)),
+        "runtime_seconds": runtime_seconds,
+        "llm_runtime_seconds": llm_metadata.get("llm_runtime_seconds"),
+        "median_latency_seconds": float(latency.median() / 1000.0) if not latency.empty else llm_metadata.get("median_latency_seconds"),
+        "p90_latency_seconds": float(latency.quantile(0.9) / 1000.0) if not latency.empty else llm_metadata.get("p90_latency_seconds"),
+        "throughput_responses_per_second": llm_metadata.get("throughput_responses_per_second"),
+        "cache_hit_rate": cache_hit_rate,
+        "ollama_calls": int(llm_metadata.get("ollama_calls", 0)),
+        "parse_ok_rate": llm_metadata.get("parse_ok_rate"),
+        "invalid_choice_rate": llm_metadata.get("invalid_choice_rate"),
+        "forbidden_choice_rate": llm_metadata.get("forbidden_choice_rate"),
+        "legacy_probability_schema_rate": llm_metadata.get("legacy_probability_schema_rate"),
+        "transport_error_rate": llm_metadata.get("transport_error_rate"),
+        "all_gates_passed": bool(llm_metadata.get("all_gates_passed", True)),
+        **_gpu_peak_summary(gpu_snapshots),
+        "gpu_snapshots": gpu_snapshots,
+        "input_artifact_paths": {key: str(value) for key, value in cfg.get("paths", {}).items()},
+        "created_at": pd.Timestamp.now(tz="UTC").isoformat(),
+    }
+    write_json(runtime, run_dir / "runtime.json")
     return {
         "cohort": run_dir / "cohort.parquet",
         "splits": run_dir / "splits.parquet",
@@ -1486,5 +1752,7 @@ def run_ces_individual_benchmark(config_path: str | Path) -> dict[str, Path]:
         "calibration_bins": run_dir / "calibration_bins.parquet",
         "aggregate": run_dir / "aggregate_crossfit_state_results.parquet",
         "aggregate_metrics": run_dir / "aggregate_eval_metrics.parquet",
+        "runtime_log": run_dir / "runtime_log.parquet",
+        "runtime": run_dir / "runtime.json",
         "report": report,
     }

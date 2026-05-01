@@ -223,7 +223,7 @@ def write_ces_eval_report(
     individual_core = individual_metrics[individual_metrics["metric_scope"] == "individual"].copy()
     baseline_comparison = pd.concat(
         [
-            individual_core[individual_core["metric_name"].isin(["turnout_brier", "vote_accuracy", "vote_log_loss"])],
+            individual_core[individual_core["metric_name"].isin(["turnout_accuracy_at_0_5", "vote_accuracy", "vote_macro_f1"])],
             aggregate_metrics[
                 aggregate_metrics["metric_name"].isin(
                     ["dem_2p_rmse", "margin_mae", "state_dem_2p_rmse", "state_margin_mae", "winner_accuracy"]

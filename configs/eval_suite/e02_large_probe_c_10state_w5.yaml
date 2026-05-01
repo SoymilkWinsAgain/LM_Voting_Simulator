@@ -1,0 +1,56 @@
+run_id: e02_large_probe_c_10state_w5
+seed: 20260426
+mode: ces_aggregate_benchmark
+
+states: [PA, MI, WI, GA, AZ, NV, NC, MN, VA, CO]
+sample_sizes: [10]
+
+cohort:
+  source: ces_rows
+  tookpost_required: true
+  citizen_required: true
+  weight_column: weight_common_post
+
+baselines:
+  aggregate:
+    - mit_2020_state_prior
+    - uniform_national_swing_from_2020
+  respondent:
+    - party_id_baseline
+    - sklearn_logit_pre_only_crossfit
+    - sklearn_logit_poll_informed
+    - ces_post_self_report_aggregate_oracle
+  llm:
+    - survey_memory_llm_strict
+
+memory:
+  max_memory_facts: 24
+
+llm:
+  timing_responses: 10
+  max_runtime_hours: 0.5
+  min_sample_size: 10
+  max_sample_size: 10
+  workers: 5
+  checkpoint_every: 25
+  gpu_sample_every: 25
+
+model:
+  provider: ollama
+  base_url: http://172.26.48.1:11434
+  model_name: qwen3.5:2b
+  temperature: 0.0
+  max_tokens: 80
+  response_format: json
+  cache_enabled: true
+
+paths:
+  run_dir: data/runs/eval_suite_local/e02_large_probe_c_10state_w5
+  ces_respondents: data/processed/ces/2024_common_vv/ces_respondents.parquet
+  ces_answers: data/processed/ces/2024_common_vv/ces_answers.parquet
+  ces_targets: data/processed/ces/2024_common_vv/ces_targets.parquet
+  ces_context: data/processed/ces/2024_common_vv/ces_context.parquet
+  ces_memory_facts_strict: data/processed/ces/2024_common_vv/ces_memory_facts.parquet
+  ces_memory_facts_poll: data/processed/ces/2024_common_vv_poll/ces_memory_facts.parquet
+  question_set: configs/questions/ces_2024_president_turnout_vote.yaml
+  mit_state_truth: data/processed/mit/president_state_truth.parquet
