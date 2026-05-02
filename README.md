@@ -19,6 +19,12 @@ raw ANES/CES/MIT files
 -> Markdown reports
 ```
 
+![Pipeline overview](assets/pics/Pipeline.png)
+
+The diagram shows the same batch workflow visually: local raw survey and
+election files are converted into processed artifacts, leakage-controlled
+memory, respondent agents, model predictions, evaluation tables, and reports.
+
 Real raw data and generated outputs are local only and are ignored by Git.
 
 ## Setup
@@ -50,19 +56,61 @@ conda run -n voting_simulator python -m election_sim.cli --help
 
 ## Raw Data
 
-Place source files under `data/raw/...`:
+Raw datasets are not committed to this repository. New clones should download
+the source files from the official providers, then place them under
+`data/raw/...` using the paths expected by the configs.
+
+ANES:
+
+- Citation: American National Election Studies. (2025). ANES 2024 Time Series
+  Study Full Release [Dataset and documentation]. August 8, 2025 version.
+  https://electionstudies.org/data-center/2024-time-series-study/
+- Used for real ANES smoke runs and optional CES persona enrichment. The
+  redacted open-ended workbook is needed only for the ANES persona enrichment
+  pipeline.
+
+Expected local files:
+
+```text
+data/raw/anes/2024/anes_2024.csv
+data/raw/anes/2024/anes_timeseries_2024_redactedopenends.xlsx
+data/raw/anes/2024/anes_2024_questionnaire.pdf
+```
+
+CES:
+
+- Citation: Ansolabehere, Stephen, Brian F. Schaffner, and Jeremy Pope.
+  Cooperative Election Study, 2024: Common Content [Computer File]. Release 2:
+  August 18, 2025. Cambridge, MA: Harvard University [producer].
+  http://cces.gov.harvard.edu
+- Used as the main respondent-level microdata source. CES respondents become
+  the simulated agents in the main 2024 presidential turnout + vote pipeline.
+
+Expected local files:
 
 ```text
 data/raw/ces/CES_2024.csv
 data/raw/ces/CCES24_Common_pre.docx
 data/raw/ces/CCES24_Common_post.docx
 data/raw/ces/CES_2024_GUIDE_vv.pdf
+```
 
+MIT Election Data:
+
+- Citation: MIT Election Data and Science Lab. (2018/2025). County Presidential
+  Election Returns 2000-2024. Harvard Dataverse.
+  https://doi.org/10.7910/DVN/VOQCHQ
+- Used as official aggregate election truth. The main CES simulation evaluates
+  state-level aggregate predictions against processed MIT truth; MIT data is
+  not mapped back onto individual CES respondents.
+
+>NOTE: The official website lacks aggregated data for 2024; you will need to perform the calculations yourself using the raw data.
+
+Expected local files:
+
+```text
 data/raw/mit/countypres_2000-2024.csv
 data/raw/mit/1976-2024-president.csv
-data/raw/mit/2024-better-evaluation.csv
-
-data/raw/anes/2024/anes_2024.csv
 ```
 
 Runtime pipelines read static YAML mappings in `configs/`; DOCX/PDF manuals are
@@ -250,7 +298,7 @@ format and `think: false`:
 model:
   provider: ollama
   base_url: http://172.26.48.1:11434
-  model_name: qwen3.5:0.8b
+  model_name: qwen3.5:2b
   temperature: 0.0
   response_format: json
 ```

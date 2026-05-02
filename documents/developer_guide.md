@@ -7,7 +7,8 @@ This guide is for a new human or AI maintainer taking over the repository.
 LM Voting Simulator tests whether LLM-based voter agents can reproduce
 individual survey outcomes and aggregate election results. The current mainline
 uses 2024 CES respondents, leakage-controlled survey memory, local or hosted
-LLMs, non-LLM baselines, and MIT Election Lab official returns.
+LLMs, non-LLM baselines, optional ANES persona enrichment, and MIT Election Lab
+official returns.
 
 The project is not a dashboard or service. It is a reproducible batch pipeline
 that writes Parquet artifacts and Markdown reports.
@@ -27,6 +28,8 @@ Data ingest:
 
 - `src/election_sim/anes.py`: ANES fixture/real minimal ingestion and ANES
   memory wrapper.
+- `src/election_sim/ces_anes_persona.py`: optional CES-to-ANES persona donor
+  matching and enriched CES memory builder.
 - `src/election_sim/ces.py`: CES respondent, answer, target, context, and
   legacy cell-distribution builders.
 - `src/election_sim/mit.py`: MIT Election Lab presidential returns processor.
@@ -65,6 +68,7 @@ Important config directories:
 - `configs/datasets/`: raw dataset path and dataset-level metadata.
 - `configs/crosswalks/`: source-variable to canonical-field mappings.
 - `configs/fact_templates/`: survey answer to prompt fact text mappings.
+- `configs/persona/`: CES-ANES persona enrichment matching and fact settings.
 - `configs/questions/`: LLM task/question definitions.
 - `configs/runs/`: run configs consumed by `run-simulation`.
 - `configs/codebooks/`: static value labels extracted from manuals.
@@ -91,6 +95,20 @@ CES memory build writes:
 ces_memory_facts.parquet
 ces_memory_cards.parquet
 ces_leakage_audit.parquet
+```
+
+CES-ANES persona enrichment writes:
+
+```text
+ces_bridge_profiles.parquet
+anes_bridge_profiles.parquet
+anes_persona_payloads.parquet
+ces_anes_matches.parquet
+ces_anes_match_summary.parquet
+ces_anes_persona_facts.parquet
+ces_memory_facts_enriched.parquet
+ces_memory_cards_enriched.parquet
+ces_anes_persona_audit.json
 ```
 
 MIT build writes:
@@ -160,6 +178,7 @@ CES LLM baselines must differ by prompt information, not just by label:
 | `ces_party_ideology_llm` | Demographics plus party ID and ideology. |
 | `ces_survey_memory_llm` | Demographics plus party/ideology and strict `safe_pre` memory facts. |
 | `ces_poll_informed_llm` | Demographics plus party/ideology, strict memory facts, and `poll_prior` facts. |
+| `ces_anes_persona_llm` | Strict CES memory plus separately labeled ANES-matched inferred persona context. |
 
 `build_ces_prompt()` enforces these modes. Do not route these baselines through
 one shared prompt that always includes party, ideology, registration status, and
@@ -178,6 +197,11 @@ Strict policy blocks:
 
 Poll-informed policy allows direct pre-election intention/preference only as
 `fact_role=poll_prior`. The report must make that visible.
+
+`strict_pre_no_vote_with_anes_persona_v1` keeps strict CES memory rules and
+allows only whitelisted ANES pre-election inferred persona facts. ANES facts
+must remain labeled as `fact_role=inferred_persona` and rendered under a
+separate prompt heading.
 
 TargetSmart fields are evaluation-only under strict and poll-informed policies.
 Do not place `TS_*` variables in prompt facts.
@@ -236,6 +260,23 @@ conda run -n voting_simulator python -m election_sim.cli run-simulation \
 conda run -n voting_simulator python -m pytest
 ```
 
+After changing ANES persona enrichment, also run a small real-data build before
+simulation:
+
+```bash
+conda run -n voting_simulator python -m election_sim.cli build-ces-anes-persona \
+  --ces-respondents data/processed/ces/2024_common_vv/ces_respondents.parquet \
+  --ces-answers data/processed/ces/2024_common_vv/ces_answers.parquet \
+  --ces-memory-facts data/processed/ces/2024_common_vv/ces_memory_facts.parquet \
+  --ces-memory-cards data/processed/ces/2024_common_vv/ces_memory_cards.parquet \
+  --anes-raw data/raw/anes/2024/anes_2024.csv \
+  --anes-open-ends data/raw/anes/2024/anes_timeseries_2024_redactedopenends.xlsx \
+  --config configs/persona/ces_anes_persona_2024.yaml \
+  --out data/processed/ces/2024_common_vv_anes_persona \
+  --limit-ces 80 \
+  --limit-anes 600
+```
+
 The default swing configs are the formal row-level configs: they use
 `population.sampling.mode: all_rows` after state/tookpost/citizenship filters
 and read `data/processed/mit/president_state_truth.parquet`. Use
@@ -272,6 +313,9 @@ Prefer data/config changes over code changes when adding variables:
 
 - New source variables: edit crosswalks and fact templates first.
 - New leakage behavior: edit `reference/leakage_policies.json` and tests.
+- New ANES persona matching behavior: edit `configs/persona/` first, then
+  update `ces_anes_persona.py` only if the existing feature or fact builders
+  cannot express the change.
 - New candidate/election truth mappings: edit MIT crosswalk configs.
 - New LLM provider: implement one client in `llm.py`, then keep responses on
   the shared schema.
